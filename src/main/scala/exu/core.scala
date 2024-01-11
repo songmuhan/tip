@@ -924,6 +924,15 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   //-------------------------------------------------------------
   //-------------------------------------------------------------
 
+  val tip = Module(new Tip)
+  tip.io.arch_valids := rob.io.commit.arch_valids
+  tip.io.instr_valids := rob.io.commit.instr_valids
+  tip.io.misspeculated := rob.io.commit.misspeculated
+  tip.io.exception.valid := rob.io.com_xcpt.valid
+  tip.io.exception.badvaddr := rob.io.com_xcpt.bits.badvaddr
+  tip.io.cpu_cycle := csr.io.time.pad(64)
+  tip.io.uops := rob.io.commit.uops
+
   //-------------------------------------------------------------
   //-------------------------------------------------------------
   // **** Decode Stage ****
@@ -1930,7 +1939,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   coreMonitorBundle := DontCare
   coreMonitorBundle.clock  := clock
   coreMonitorBundle.reset  := reset
-
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

@@ -121,6 +121,10 @@ class CommitSignals(implicit p: Parameters) extends BoomBundle
   val uops        = Vec(retireWidth, new MicroOp())
   val fflags      = Valid(UInt(5.W))
 
+  /* fixme: different between instr_valids vs valids ? */
+  val instr_valids  = Vec(retireWidth, Bool()) // These instructions are valid
+  val misspeculated = Vec(retireWidth, Bool()) // These instructions caused a mispeculation
+
   // These come a cycle later
   val debug_insts = Vec(retireWidth, UInt(32.W))
 
@@ -314,6 +318,8 @@ class Rob(
     val rob_exception = Reg(Vec(numRobRows, Bool()))
     val rob_predicated = Reg(Vec(numRobRows, Bool())) // Was this instruction predicated out?
 
+    val rob_misspeculated = Reg(Vec(numRobRows,Bool()))
+
     val rob_debug_wdata = Mem(numRobRows, UInt(xLen.W))
 
     //-----------------------------------------------
@@ -331,6 +337,8 @@ class Rob(
       rob_exception(rob_tail) := io.enq_uops(w).exception
       rob_predicated(rob_tail)   := false.B
       rob_fflags(w)(rob_tail)    := 0.U
+
+      rob_misspeculated(rob_tail) := false.B
 
       assert (rob_val(rob_tail) === false.B, "[rob] overwriting a valid entry.")
       assert ((io.enq_uops(w).rob_idx >> log2Ceil(coreWidth)) === rob_tail)
@@ -413,6 +421,9 @@ class Rob(
     io.commit.uops(w)   := rob_uop(com_idx)
     io.commit.debug_insts(w) := rob_debug_inst_rdata(w)
 
+    io.commit.instr_valids(w) := rob_val(com_idx) 
+    io.commit.misspeculated(w) := rob_misspeculated(com_idx)
+
     // We unbusy branches in b1, but its easier to mark the taken/provider src in b2,
     // when the branch might be committing
     when (io.brupdate.b2.mispredict &&
@@ -420,6 +431,7 @@ class Rob(
       GetRowIdx(io.brupdate.b2.uop.rob_idx) === com_idx) {
       io.commit.uops(w).debug_fsrc := BSRC_C
       io.commit.uops(w).taken      := io.brupdate.b2.taken
+      io.commit.misspeculated(w) := true.B
     }
 
 
@@ -470,6 +482,7 @@ class Rob(
       MatchBank(GetBankIdx(io.brupdate.b2.uop.rob_idx))) {
       rob_uop(GetRowIdx(io.brupdate.b2.uop.rob_idx)).debug_fsrc := BSRC_C
       rob_uop(GetRowIdx(io.brupdate.b2.uop.rob_idx)).taken      := io.brupdate.b2.taken
+      rob_misspeculated(GetRowIdx(io.brupdate.b2.uop.rob_idx)) := true.B
     }
 
     // -----------------------------------------------
