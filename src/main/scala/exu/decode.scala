@@ -597,6 +597,29 @@ class DecodeUnit(implicit p: Parameters) extends BoomModule
 
   //-------------------------------------------------------------
 
+  val event_tag = WireInit(0.U(12.W))
+  event_tag := inst(31, 20)
+  val ucsrInst = (cs.uopc === uopADDI) && (inst(RD_MSB,RD_LSB) === 0.U)
+  val get_ucsr = ucsrInst && event_tag(11, 5) === 1.U   //32-63
+  uop.ucsrInst := ucsrInst
+
+  //Enable_PerfCounter_Support:
+  val readCounter = ucsrInst && event_tag(11, 7) === 1.U  //128 - 256
+  uop.readCounter := readCounter
+
+  when (readCounter || get_ucsr) {
+    uop.ldst := inst(RS1_MSB,RS1_LSB)
+  }
+
+  when (ucsrInst) {
+    uop.is_unique := true.B
+  }
+
+  when (readCounter) {
+    uop.uopc := uopADDI
+    uop.imm_packed := 0.U
+  }
+
   io.deq.uop := uop
 }
 
