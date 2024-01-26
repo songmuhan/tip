@@ -118,6 +118,8 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
 
   val ldq_full    = Output(Vec(coreWidth, Bool()))
   val stq_full    = Output(Vec(coreWidth, Bool()))
+  //topdown
+  val has_flight_ld = Output(Bool())
 
   val fp_stdata   = Flipped(Decoupled(new ExeUnitResp(fLen)))
 
@@ -155,6 +157,12 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
     val release = Bool()
     val tlbMiss = Bool()
   })
+
+  val dtlb_valid_access = Output(UInt(4.W))
+  val dtlb_miss_num     = Output(UInt(4.W))
+  val dcache_valid_access  = Output(UInt(4.W))
+  val dcache_nack_num      = Output(UInt(4.W))
+
 }
 
 class LSUIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
@@ -254,6 +262,14 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.perf.release := io.dmem.perf.release
 
 
+  val dtlb_valid_req = widthMap(w => dtlb.io.req(w).valid)
+  val dtlb_miss_req  = widthMap(w => dtlb.io.req(w).valid && (dtlb.io.resp(w).miss || !dtlb.io.req(w).ready))
+
+  io.core.dtlb_valid_access := PopCount(dtlb_valid_req.asUInt)
+  io.core.dtlb_miss_num     := PopCount(dtlb_miss_req.asUInt)
+  
+  val dcache_nack = widthMap(w => io.dmem.nack(w).valid && (io.dmem.nack(w).bits.uop.uses_ldq || io.dmem.nack(w).bits.uop.uses_stq))
+  io.core.dcache_nack_num     := PopCount(dcache_nack.asUInt)
 
   val clear_store     = WireInit(false.B)
   val live_store_mask = RegInit(0.U(numStqEntries.W))
@@ -752,6 +768,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.dmem.req.valid := dmem_req.map(_.valid).reduce(_||_)
   io.dmem.req.bits  := dmem_req
   val dmem_req_fire = widthMap(w => dmem_req(w).valid && io.dmem.req.fire)
+  io.core.dcache_valid_access     := PopCount(dmem_req_fire.asUInt)
 
   val s0_executing_loads = WireInit(VecInit((0 until numLdqEntries).map(x=>false.B)))
 
@@ -1638,6 +1655,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       ldq(i).bits.executed   := false.B
     }
   }
+
+  //get ldq execution information
+  val has_flight_ld = widthMap(w => ldq(w).valid && !ldq(w).bits.succeeded).reduce(_||_)
+  io.core.has_flight_ld := has_flight_ld
 
   //-------------------------------------------------------------
   // Live Store Mask
