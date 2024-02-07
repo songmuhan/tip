@@ -532,10 +532,11 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   //update nowWarmupInsts
   when (sampleValid) { //usemode
     switch (sampleEventSel){
-      is (0.U)  { nowEventNum := nowEventNum + RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) }
+      is (0.U)  { nowEventNum := nowEventNum + 1.U } // cycles
       is (1.U)  { nowEventNum := nowEventNum + PopCount(com_misp_cfi.asUInt) }
       is (2.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.acquire, 1.U, 0.U) }
       is (3.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.tlbMiss, 1.U, 0.U) }
+      is (4.U)  { nowEventNum := nowEventNum + RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) } // instruction
     }
     printf("wordValid, instnum: %d, eventnum: %d, maxnum: %d\n", nowWarmupInsts, nowEventNum, maxEventNum)
   }
