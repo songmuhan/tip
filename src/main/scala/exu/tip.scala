@@ -187,12 +187,12 @@ class Tip(implicit p: Parameters) extends BoomModule {
         }
     }
 
-    printf("%d | V:%b | [ S:%b | D: %b | F: [f:%b|b:%b|e:%b] | Id:%d ", io.cpu_cycle,out.sample_valid, out.stalled, out.frontend, out.flushes.flush, out.flushes.mispredicted, out.flushes.exception, out.oldestId);
-    for (i <- 0 until coreWidth) {
-        printf(" | %b pc:%x", 
-            out.valids(i),
-            out.addrs(i)
-        )
-    }
-    printf("\n")
+    // printf("%d | V:%b | [ S:%b | D: %b | F: [f:%b|b:%b|e:%b] | Id:%d ", io.cpu_cycle,out.sample_valid, out.stalled, out.frontend, out.flushes.flush, out.flushes.mispredicted, out.flushes.exception, out.oldestId);
+    // for (i <- 0 until coreWidth) {
+    //     printf(" | %b pc:%x", 
+    //         out.valids(i),
+    //         out.addrs(i)
+    //     )
+    // }
+    // printf("\n")
 }

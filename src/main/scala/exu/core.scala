@@ -401,7 +401,14 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   val nowWarmupInsts  = RegInit(0.U(64.W))
   val nowEventNum     = RegInit(0.U(64.W))
 
+  val wait4TipSampleValidCycles = RegInit(0.U(64.W))
+  /* freeze tempReg once overflow_event && tip sample valid */
+  val TipWrite2TempReg = RegInit(false.B)
+  val TipSampleTimes   = RegInit(0.U(64.W))
+
   val tempReg1  = RegInit(0.U(64.W))
+
+  /* saving tip related value into tempReg2-4, read these Regs through BOOM-STOP defined instruction */
   val tempReg2  = RegInit(0.U(64.W))
   val tempReg3  = RegInit(0.U(64.W))
   val tempReg4  = RegInit(0.U(64.W))
@@ -572,10 +579,11 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   //update nowWarmupInsts
   when (sampleValid) { //usemode
     switch (sampleEventSel){
-      is (0.U)  { nowEventNum := nowEventNum + RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) }
+      is (0.U)  { nowEventNum := nowEventNum + 1.U } // cycles
       is (1.U)  { nowEventNum := nowEventNum + PopCount(com_misp_cfi.asUInt) }
       is (2.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.acquire, 1.U, 0.U) }
       is (3.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.tlbMiss, 1.U, 0.U) }
+      is (4.U)  { nowEventNum := nowEventNum + RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) } // instruction
     }
     printf("wordValid, instnum: %d, eventnum: %d, maxnum: %d\n", nowWarmupInsts, nowEventNum, maxEventNum)
   }
@@ -808,8 +816,10 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           io.ifu.redirect_pc  := csr.io.evec
           sampleHappen := 1.U   // set the register for ptrace detect the sample ecall
         }
+        printf("TIP:: maxEventNum:%d nowEventNum:%d, wait4TipSampleValidCycles:%d\n", maxEventNum, nowEventNum, wait4TipSampleValidCycles)
+        nowEventNum := wait4TipSampleValidCycles
         maxEventNum := 0.U
-        nowEventNum := 0.U
+        wait4TipSampleValidCycles := 0.U
         pfc_enable  := 0.U     // disable the performance counter
       }
       .otherwise {
@@ -831,6 +841,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           is (2.U)  { io.ifu.redirect_pc := tempReg3 }
           is (3.U)  { io.ifu.redirect_pc := tempReg4 }
         }
+        printf("TIP:: end of %d sample\n", TipSampleTimes)
+        TipWrite2TempReg := false.B
+        TipSampleTimes := TipSampleTimes + 1.U
       }
       .otherwise{
         io.ifu.redirect_pc := Mux(FlushTypes.useSamePC(flush_typ), flush_pc, flush_pc_next)
@@ -966,8 +979,52 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dec_uops(w) := decode_units(w).io.deq.uop
 
     when (overflow_event) {
-      dec_uops(w).exception := true.B
-      dec_uops(w).exc_cause := Cause_OverFlow
+      when (tip.io.out.sample_valid) {
+        dec_uops(w).exception := true.B
+        dec_uops(w).exc_cause := Cause_OverFlow
+
+          when (!TipWrite2TempReg.asBool) {
+              TipWrite2TempReg := true.B 
+              // here we want to get the information in tip reg
+              val concated = Cat(tip.io.out.sample_valid,
+                                tip.io.out.stalled,
+                                tip.io.out.frontend,
+                                tip.io.out.flushes.exception,
+                                tip.io.out.flushes.flush,
+                                tip.io.out.flushes.mispredicted,
+                                tip.io.out.oldestId,
+                                tip.io.out.valids.asUInt,
+                                ).asUInt
+              tempReg2 := concated
+              /* this is hardcode, MediumBoom retire at most two instructions every cycle */
+              tempReg3 := tip.io.out.addrs(0)
+              tempReg4 := tip.io.out.addrs(1)
+              printf("TIP:: %d | 0x%x 0x%x 0x%x\n", debug_tsc_reg, tempReg2, tempReg3, tempReg4)
+        }
+
+      }.otherwise {
+
+        /* fixme: In tip, only sample target process? */
+
+        wait4TipSampleValidCycles := wait4TipSampleValidCycles + 1.U 
+        printf("TIP:: ---- sample is not valid, cycle: %d ------", wait4TipSampleValidCycles)
+        printf("%d | V:%b | [ S:%b | D: %b | F: [f:%b|b:%b|e:%b] | Id:%d ", 
+                debug_tsc_reg,
+                tip.io.out.sample_valid, 
+                tip.io.out.stalled, 
+                tip.io.out.frontend, 
+                tip.io.out.flushes.flush, 
+                tip.io.out.flushes.mispredicted, 
+                tip.io.out.flushes.exception, 
+                tip.io.out.oldestId);
+        for (i <- 0 until coreWidth) {
+              printf(" | %b pc:%x", 
+                tip.io.out.valids(i),
+                tip.io.out.addrs(i)
+              )
+          }
+          printf("\n")
+      }
     }
 
   }
