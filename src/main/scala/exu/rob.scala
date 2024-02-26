@@ -154,6 +154,7 @@ class CommitExceptionSignals(implicit p: Parameters) extends BoomBundle
 
   val isURet = Bool()
   val uret_target = UInt(2.W)
+  val inst = UInt(32.W) 
 }
 
 /**
@@ -583,6 +584,7 @@ class Rob(
   io.com_xcpt.bits.is_rvc    := com_xcpt_uop.is_rvc
   io.com_xcpt.bits.pc_lob    := com_xcpt_uop.pc_lob
 
+  io.com_xcpt.bits.inst := com_xcpt_uop.inst
   io.com_xcpt.bits.isURet    := false.B 
   io.com_xcpt.bits.uret_target := 0.U
 

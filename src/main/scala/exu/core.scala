@@ -773,8 +773,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   tip.io.arch_valids := rob.io.commit.arch_valids
   tip.io.instr_valids := rob.io.commit.instr_valids
   tip.io.misspeculated := rob.io.commit.misspeculated
-  tip.io.exception.valid := rob.io.com_xcpt.valid
+  tip.io.exception.valid := rob.io.com_xcpt.valid && rob.io.com_xcpt.bits.cause =/= Cause_OverFlow
   tip.io.exception.badvaddr := rob.io.com_xcpt.bits.badvaddr
+  tip.io.exception.inst := rob.io.com_xcpt.bits.inst
   tip.io.cpu_cycle := csr.io.time.pad(64)
   tip.io.uops := rob.io.commit.uops
 
@@ -995,8 +996,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
                               ).asUInt
             tempReg2 := concated
             /* this is hardcode, MediumBoom retire at most two instructions every cycle */
-            tempReg3 := tip.io.out.addrs(0)
-            tempReg4 := tip.io.out.addrs(1)
+            tempReg3 := tip.io.out.insts(0)
+            tempReg4 := tip.io.out.insts(1)
             printf("TIP:: %d | 0x%x 0x%x 0x%x\n", debug_tsc_reg, tempReg2, tempReg3, tempReg4)
           }
         }

@@ -16,7 +16,7 @@ class TipFlushes(implicit p: Parameters) extends BoomBundle {
 }
 
 class OIR(implicit p: Parameters) extends BoomBundle {
-    val addr = UInt(vaddrBits.W)
+    val inst = UInt(32.W)
     val flushes = new TipFlushes
 }
 
@@ -24,10 +24,11 @@ class TipException(implicit p: Parameters) extends BoomBundle {
     val valid = Bool()
     val badvaddr = UInt(xLen.W)
     // val cause = UInt(xLen.W)
+    val inst = UInt(32.W)
 }
 
 class TipReg(implicit p: Parameters) extends BoomBundle {
-    val addrs = Vec(retireWidth, UInt(vaddrBits.W))
+    val insts = Vec(retireWidth, UInt(32.W))
     val valids = Vec(retireWidth, Bool())
     val oldestId = UInt(log2Ceil(retireWidth).W)
   
@@ -114,12 +115,12 @@ class Tip(implicit p: Parameters) extends BoomModule {
         ori.flushes.flush := false.B
         ori.flushes.exception := true.B
         ori.flushes.mispredicted := false.B
-        ori.addr := io.exception.badvaddr
+        ori.inst := io.exception.inst
     }.elsewhen(committing) {
         ori.flushes.flush := youngest_flush
         ori.flushes.exception := false.B
         ori.flushes.mispredicted := youngest_mispredicted
-        ori.addr := youngest_uop.debug_pc(vaddrBits - 1, 0)
+        ori.inst := youngest_uop.inst
     }
 
     /* now we update tip output register by different rob state */
@@ -132,14 +133,14 @@ class Tip(implicit p: Parameters) extends BoomModule {
         when(rob_not_empty) {
             waiting_for_dispatching := false.B
             out.sample_valid := true.B
-            out.addrs := io.uops.map(_.debug_pc(vaddrBits - 1, 0)) 
+            out.insts := io.uops.map(_.inst) 
             out.valids := io.instr_valids
         }
 
     }.otherwise {
         when(is_computing) {
 
-            out.addrs := io.uops.map(_.debug_pc(vaddrBits - 1, 0))
+            out.insts := io.uops.map(_.inst) 
             out.valids := io.arch_valids
 
             out.flushes := 0.U.asTypeOf(new TipFlushes)
@@ -154,7 +155,7 @@ class Tip(implicit p: Parameters) extends BoomModule {
             val rob_valid = io.instr_valids.asUInt.orR
             val rob_valid_index = Mux(rob_valid, PriorityEncoder(io.instr_valids), 0.U)
 
-            out.addrs := io.uops.map(_.debug_pc(vaddrBits - 1, 0))
+            out.insts := io.uops.map(_.inst) 
             out.valids := io.instr_valids
             out.oldestId := rob_valid_index
 
@@ -166,7 +167,7 @@ class Tip(implicit p: Parameters) extends BoomModule {
 
         }.elsewhen(is_flushes) {
 
-            out.addrs := VecInit(ori.addr +: Seq.fill(retireWidth - 1)(0.U(vaddrBits.W)))
+            out.insts := VecInit(ori.inst +: Seq.fill(retireWidth - 1)(0.U(32.W)))
             out.valids := VecInit(true.B +: Seq.fill(retireWidth - 1)(false.B))
             out.oldestId := 0.U
 
@@ -185,17 +186,8 @@ class Tip(implicit p: Parameters) extends BoomModule {
 
             waiting_for_dispatching := true.B
 
-            out.addrs := VecInit(Seq.fill(retireWidth)(0.U(vaddrBits.W)))
+            out.insts := VecInit(Seq.fill(retireWidth)(0.U(32.W)))
             out.valids := VecInit(Seq.fill(retireWidth)(false.B))
         }
     }
-
-    // printf("%d | V:%b | [ S:%b | D: %b | F: [f:%b|b:%b|e:%b] | Id:%d ", io.cpu_cycle,out.sample_valid, out.stalled, out.frontend, out.flushes.flush, out.flushes.mispredicted, out.flushes.exception, out.oldestId);
-    // for (i <- 0 until coreWidth) {
-    //     printf(" | %b pc:%x", 
-    //         out.valids(i),
-    //         out.addrs(i)
-    //     )
-    // }
-    // printf("\n")
 }
