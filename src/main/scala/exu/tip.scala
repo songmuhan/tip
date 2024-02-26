@@ -60,9 +60,9 @@ class Tip(implicit p: Parameters) extends BoomModule {
     /* are we still in drain state, waiting for the first dispatch instruction */
     val waiting_for_dispatching = RegInit(false.B)
     /* instr addrs of rob head row */
-    val addrs = VecInit(io.uops.map(_.debug_pc(vaddrBits - 1, 0)))
+    // val addrs = VecInit(io.uops.map(_.debug_pc(vaddrBits - 1, 0)))
     /* is these instr flush the pipeline? */
-    val flush_on_commits = VecInit(io.uops.map(_.flush_on_commit))
+    // val flush_on_commits = VecInit(io.uops.map(_.flush_on_commit))
     /* at least one instr is committing*/
     val committing = io.arch_valids.reduce(_ || _)
     /* at least one instr is valid */
@@ -105,7 +105,10 @@ class Tip(implicit p: Parameters) extends BoomModule {
     val youngest_index = (io.arch_valids.length - 1).U - reversedValidIndex
 
     val youngest_mispredicted = io.misspeculated(youngest_index)
-    val youngest_flush = flush_on_commits(youngest_index)
+    
+    val youngest_uop = io.uops(youngest_index)
+    val youngest_flush = youngest_uop.flush_on_commit
+
     
     when(io.exception.valid) {
         ori.flushes.flush := false.B
@@ -116,7 +119,7 @@ class Tip(implicit p: Parameters) extends BoomModule {
         ori.flushes.flush := youngest_flush
         ori.flushes.exception := false.B
         ori.flushes.mispredicted := youngest_mispredicted
-        ori.addr := addrs(youngest_index)
+        ori.addr := youngest_uop.debug_pc(vaddrBits - 1, 0)
     }
 
     /* now we update tip output register by different rob state */
@@ -129,14 +132,14 @@ class Tip(implicit p: Parameters) extends BoomModule {
         when(rob_not_empty) {
             waiting_for_dispatching := false.B
             out.sample_valid := true.B
-            out.addrs := addrs 
+            out.addrs := io.uops.map(_.debug_pc(vaddrBits - 1, 0)) 
             out.valids := io.instr_valids
         }
 
     }.otherwise {
         when(is_computing) {
 
-            out.addrs := addrs
+            out.addrs := io.uops.map(_.debug_pc(vaddrBits - 1, 0))
             out.valids := io.arch_valids
 
             out.flushes := 0.U.asTypeOf(new TipFlushes)
@@ -151,7 +154,7 @@ class Tip(implicit p: Parameters) extends BoomModule {
             val rob_valid = io.instr_valids.asUInt.orR
             val rob_valid_index = Mux(rob_valid, PriorityEncoder(io.instr_valids), 0.U)
 
-            out.addrs := addrs
+            out.addrs := io.uops.map(_.debug_pc(vaddrBits - 1, 0))
             out.valids := io.instr_valids
             out.oldestId := rob_valid_index
 

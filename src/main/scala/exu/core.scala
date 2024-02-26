@@ -442,6 +442,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       nowWarmupInsts := 0.U
       event_counters.io.reset_counter := true.B
       nowEventNum := 0.U
+      TipWrite2TempReg := false.B
     }
   }
 
@@ -768,6 +769,14 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
 
 
+  val tip = Module(new Tip)
+  tip.io.arch_valids := rob.io.commit.arch_valids
+  tip.io.instr_valids := rob.io.commit.instr_valids
+  tip.io.misspeculated := rob.io.commit.misspeculated
+  tip.io.exception.valid := rob.io.com_xcpt.valid
+  tip.io.exception.badvaddr := rob.io.com_xcpt.bits.badvaddr
+  tip.io.cpu_cycle := csr.io.time.pad(64)
+  tip.io.uops := rob.io.commit.uops
 
   //-------------------------------------------------------------
   // **** Fetch Stage/Frontend ****
@@ -841,9 +850,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           is (2.U)  { io.ifu.redirect_pc := tempReg3 }
           is (3.U)  { io.ifu.redirect_pc := tempReg4 }
         }
-        printf("TIP:: end of %d sample\n", TipSampleTimes)
-        TipWrite2TempReg := false.B
-        TipSampleTimes := TipSampleTimes + 1.U
       }
       .otherwise{
         io.ifu.redirect_pc := Mux(FlushTypes.useSamePC(flush_typ), flush_pc, flush_pc_next)
@@ -937,15 +943,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   //-------------------------------------------------------------
   //-------------------------------------------------------------
 
-  val tip = Module(new Tip)
-  tip.io.arch_valids := rob.io.commit.arch_valids
-  tip.io.instr_valids := rob.io.commit.instr_valids
-  tip.io.misspeculated := rob.io.commit.misspeculated
-  tip.io.exception.valid := rob.io.com_xcpt.valid
-  tip.io.exception.badvaddr := rob.io.com_xcpt.bits.badvaddr
-  tip.io.cpu_cycle := csr.io.time.pad(64)
-  tip.io.uops := rob.io.commit.uops
-
   //-------------------------------------------------------------
   //-------------------------------------------------------------
   // **** Decode Stage ****
@@ -979,54 +976,34 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dec_uops(w) := decode_units(w).io.deq.uop
 
     when (overflow_event) {
-      when (tip.io.out.sample_valid) {
-        dec_uops(w).exception := true.B
-        dec_uops(w).exc_cause := Cause_OverFlow
+        when(tip.io.out.sample_valid && isTargetProc) {
 
-          when (!TipWrite2TempReg.asBool) {
-              TipWrite2TempReg := true.B 
-              // here we want to get the information in tip reg
-              val concated = Cat(tip.io.out.sample_valid,
-                                tip.io.out.stalled,
-                                tip.io.out.frontend,
-                                tip.io.out.flushes.exception,
-                                tip.io.out.flushes.flush,
-                                tip.io.out.flushes.mispredicted,
-                                tip.io.out.oldestId,
-                                tip.io.out.valids.asUInt,
-                                ).asUInt
-              tempReg2 := concated
-              /* this is hardcode, MediumBoom retire at most two instructions every cycle */
-              tempReg3 := tip.io.out.addrs(0)
-              tempReg4 := tip.io.out.addrs(1)
-              printf("TIP:: %d | 0x%x 0x%x 0x%x\n", debug_tsc_reg, tempReg2, tempReg3, tempReg4)
-        }
+          dec_uops(w).exception := true.B
+          dec_uops(w).exc_cause := Cause_OverFlow
 
-      }.otherwise {
-
-        /* fixme: In tip, only sample target process? */
-
-        wait4TipSampleValidCycles := wait4TipSampleValidCycles + 1.U 
-        printf("TIP:: ---- sample is not valid, cycle: %d ------", wait4TipSampleValidCycles)
-        printf("%d | V:%b | [ S:%b | D: %b | F: [f:%b|b:%b|e:%b] | Id:%d ", 
-                debug_tsc_reg,
-                tip.io.out.sample_valid, 
-                tip.io.out.stalled, 
-                tip.io.out.frontend, 
-                tip.io.out.flushes.flush, 
-                tip.io.out.flushes.mispredicted, 
-                tip.io.out.flushes.exception, 
-                tip.io.out.oldestId);
-        for (i <- 0 until coreWidth) {
-              printf(" | %b pc:%x", 
-                tip.io.out.valids(i),
-                tip.io.out.addrs(i)
-              )
+          when(!TipWrite2TempReg) {
+            TipWrite2TempReg := true.B
+            assert(tip.io.out.sample_valid)
+            val concated = Cat(tip.io.out.sample_valid,
+                               tip.io.out.stalled,
+                               tip.io.out.frontend,
+                               tip.io.out.flushes.exception,
+                               tip.io.out.flushes.flush,
+                               tip.io.out.flushes.mispredicted,
+                               tip.io.out.oldestId,
+                               tip.io.out.valids.asUInt,
+                              ).asUInt
+            tempReg2 := concated
+            /* this is hardcode, MediumBoom retire at most two instructions every cycle */
+            tempReg3 := tip.io.out.addrs(0)
+            tempReg4 := tip.io.out.addrs(1)
+            printf("TIP:: %d | 0x%x 0x%x 0x%x\n", debug_tsc_reg, tempReg2, tempReg3, tempReg4)
           }
-          printf("\n")
-      }
+        }
+        .otherwise {
+          wait4TipSampleValidCycles := wait4TipSampleValidCycles + 1.U 
+        }
     }
-
   }
 
   //-------------------------------------------------------------
