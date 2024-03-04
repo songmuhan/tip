@@ -65,9 +65,13 @@ trait ScalarOpConstants
   val GetUCSR_ExitNPC       = 35.U(12.W)
 
   val GetUCSR_Temp1         = 36.U(12.W)
-  val GetUCSR_Temp2         = 37.U(12.W)
-  val GetUCSR_Temp3         = 38.U(12.W)
-  val GetUCSR_Temp4         = 39.U(12.W)
+
+  val GetUCSR_TIP_0         = 37.U(12.W)
+  val GetUCSR_TIP_1         = 38.U(12.W)
+  val GetUCSR_TIP_2         = 39.U(12.W)
+  val GetUCSR_TIP_3         = 40.U(12.W)
+  val GetUCSR_TIP_4         = 41.U(12.W)
+  val GetUCSR_TIP_5         = 42.U(12.W)
 
   //for testing
   val GetUCSR_SampleFuncAddr  = 41.U(12.W)

@@ -1,4 +1,3 @@
-//******************************************************************************
 // Copyright (c) 2015 - 2019, The Regents of the University of California (Regents).
 // All Rights Reserved. See LICENSE and LICENSE.SiFive for license details.
 //------------------------------------------------------------------------------
@@ -403,24 +402,31 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   val wait4TipSampleValidCycles = RegInit(0.U(64.W))
   /* freeze tempReg once overflow_event && tip sample valid */
-  val TipWrite2TempReg = RegInit(false.B)
+  val TipSavedData = RegInit(false.B)
   val TipSampleTimes   = RegInit(0.U(64.W))
 
   val tempReg1  = RegInit(0.U(64.W))
+  /* saving tip related information into corresponding registers, read these Regs through BOOM-STOP defined instruction */
+  val Tip_Reg_Num = 6
+  val TipInfoRegs = VecInit(Seq.fill(Tip_Reg_Num)(RegInit(0.U(64.W))))
+  /* fixme: can we save process id to figure out which process ? */
 
-  /* saving tip related value into tempReg2-4, read these Regs through BOOM-STOP defined instruction */
-  val tempReg2  = RegInit(0.U(64.W))
-  val tempReg3  = RegInit(0.U(64.W))
-  val tempReg4  = RegInit(0.U(64.W))
+  // val isTargetProc = procTag === 0x1234567.U
 
-  val isTargetProc = procTag === 0x1234567.U
-  val startCounter = csr.io.status.prv <= pfc_maxPriv && isTargetProc && (pfc_enable === 1.U)
-  val isUserMode      = csr.io.status.prv === 0.U && RegNext(csr.io.status.prv === 0.U) && RegNext(RegNext(csr.io.status.prv === 0.U))
-  val sampleValid     = isUserMode && isTargetProc && maxEventNum =/= 0.U && warmupInstNum === 0.U 
-  val warmupValid     = isUserMode && isTargetProc && warmupInstNum =/= 0.U 
-  val overflow_event  = sampleValid &&  (nowEventNum > maxEventNum)
+  // val startCounter = csr.io.status.prv <= pfc_maxPriv && isTargetProc && (pfc_enable === 1.U)
 
+ 
+  val start_sample = pfc_enable === 1.U && maxEventNum =/= 0.U
+   /* Since we want to sample the machine state instead of just user mode state, always record the values into counters,
+    * *BUT* only after pfc_enable is set, we start sampling, discard all information recorded
+    */
 
+  // val isUserMode      = csr.io.status.prv === 0.U && RegNext(csr.io.status.prv === 0.U) && RegNext(RegNext(csr.io.status.prv === 0.U))
+  
+  val isUserMode = csr.io.status.prv === 0.U
+  /* it looks like that transfer between machine mode and user mode takes 3 cycle, we don't care the transfer stage */
+  
+  val overflow_event = start_sample && (nowEventNum > maxEventNum) 
   //-------------------------------------------------------------
   //Enable_PerfCounter_Support
   val event_counters = Module(new EventCounter(exe_units.numIrfReaders))
@@ -430,20 +436,12 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   for (w <- 0 until coreWidth) {
     val uop = rob.io.commit.uops(w)
     when (rob.io.commit.valids(w) && uop.ucsrInst && uop.inst(31, 20) === SpecialInst_RstPFC) { //tag == 1024, reset all counters
-      event_counters.io.reset_counter := true.B
+      event_counters.io.reset_counter := true.B 
+      TipSavedData := false.B
+      TipInfoRegs := VecInit(Seq.fill(Tip_Reg_Num)(0.U(64.W)))
     }
   }
 
-  //reset counter when running > start
-  when (warmupValid) {
-    nowWarmupInsts := nowWarmupInsts + RegNext(PopCount(rob.io.commit.arch_valids.asUInt))
-    when (nowWarmupInsts > warmupInstNum) {
-      warmupInstNum := 0.U
-      nowWarmupInsts := 0.U
-      event_counters.io.reset_counter := true.B
-      nowEventNum := 0.U
-    }
-  }
 
   //start read counter
   for (w <- 0 until exe_units.numIrfReaders) {
@@ -576,16 +574,11 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   val mini_exception = RegNext(rob.io.flush.valid && !rob.io.com_xcpt.valid && rob.io.com_xcpt.bits.cause === MINI_EXCEPTION_MEM_ORDERING)
 
 
-  //update nowWarmupInsts
-  when (sampleValid) { //usemode
-    switch (sampleEventSel){
-      is (0.U)  { nowEventNum := nowEventNum + 1.U } // cycles
-      is (1.U)  { nowEventNum := nowEventNum + PopCount(com_misp_cfi.asUInt) }
-      is (2.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.acquire, 1.U, 0.U) }
-      is (3.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.tlbMiss, 1.U, 0.U) }
-      is (4.U)  { nowEventNum := nowEventNum + RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) } // instruction
-    }
-    printf("wordValid, instnum: %d, eventnum: %d, maxnum: %d\n", nowWarmupInsts, nowEventNum, maxEventNum)
+  switch (sampleEventSel){
+    is (0.U)  { nowEventNum := nowEventNum + 1.U } // cycles
+    is (1.U)  { nowEventNum := nowEventNum + PopCount(com_misp_cfi.asUInt) }
+    is (2.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.acquire, 1.U, 0.U) }
+    is (3.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.tlbMiss, 1.U, 0.U) }
   }
 
   //connect signal to counters
@@ -593,79 +586,78 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     event_counters.io.event_signals(w) := 0.U
   }
 
-  when (startCounter) {
-    event_counters.io.event_signals(0) :=   1.U  //cycles
-    event_counters.io.event_signals(1) :=  RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) // commit inst
-    event_counters.io.event_signals(2) :=  Mux(io.ifu.icache_valid_access, 1.U, 0.U) //i-cache valid access number
-    event_counters.io.event_signals(3) :=  Mux(io.ifu.icache_hit, 1.U, 0.U)  //icache hit number
-    event_counters.io.event_signals(4) :=  Mux(io.ifu.perf.acquire, 1.U, 0.U) //i-cache send req to next level cache
-    event_counters.io.event_signals(5) :=  Mux(io.ifu.itlb_valid_access, 1.U, 0.U) //itlb valid access number
-    event_counters.io.event_signals(6) :=  Mux(io.ifu.itlb_hit, 1.U, 0.U) //itlb hit number
-    event_counters.io.event_signals(7) :=  Mux(io.ifu.perf.tlbMiss, 1.U, 0.U) //i-tlb start ptw
-    event_counters.io.event_signals(8) :=  Mux(io.ifu.bpsrc_f1, 1.U, 0.U) // npc use f1
-    event_counters.io.event_signals(9) :=  Mux(io.ifu.bpsrc_f2, 1.U, 0.U) // npc use f2
-    event_counters.io.event_signals(10) :=  Mux(io.ifu.bpsrc_f3, 1.U, 0.U) // npc use f3
-    event_counters.io.event_signals(11) :=  Mux(io.ifu.bpsrc_core, 1.U, 0.U) // npc use core information
+  event_counters.io.event_signals(0) :=  1.U  //cycles
+  event_counters.io.event_signals(1) :=  RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) // commit inst
+  event_counters.io.event_signals(2) :=  Mux(io.ifu.icache_valid_access, 1.U, 0.U) //i-cache valid access number
+  event_counters.io.event_signals(3) :=  Mux(io.ifu.icache_hit, 1.U, 0.U)  //icache hit number
+  event_counters.io.event_signals(4) :=  Mux(io.ifu.perf.acquire, 1.U, 0.U) //i-cache send req to next level cache
+  event_counters.io.event_signals(5) :=  Mux(io.ifu.itlb_valid_access, 1.U, 0.U) //itlb valid access number
+  event_counters.io.event_signals(6) :=  Mux(io.ifu.itlb_hit, 1.U, 0.U) //itlb hit number
+  event_counters.io.event_signals(7) :=  Mux(io.ifu.perf.tlbMiss, 1.U, 0.U) //i-tlb start ptw
+  event_counters.io.event_signals(8) :=  Mux(io.ifu.bpsrc_f1, 1.U, 0.U) // npc use f1
+  event_counters.io.event_signals(9) :=  Mux(io.ifu.bpsrc_f2, 1.U, 0.U) // npc use f2
+  event_counters.io.event_signals(10) :=  Mux(io.ifu.bpsrc_f3, 1.U, 0.U) // npc use f3
+  event_counters.io.event_signals(11) :=  Mux(io.ifu.bpsrc_core, 1.U, 0.U) // npc use core information
 
-    event_counters.io.event_signals(12) :=  Mux(fb_out_zero, 1.U, 0.U)  //fetch buffer output no valid inst
-    event_counters.io.event_signals(13) :=  Mux(fb_out_full, 1.U, 0.U)  //fb output has corewidth valid inst
-    event_counters.io.event_signals(14) :=  Mux(fb_out_notFull, 1.U, 0.U) //fbout has valid inst but not full
+  event_counters.io.event_signals(12) :=  Mux(fb_out_zero, 1.U, 0.U)  //fetch buffer output no valid inst
+  event_counters.io.event_signals(13) :=  Mux(fb_out_full, 1.U, 0.U)  //fb output has corewidth valid inst
+  event_counters.io.event_signals(14) :=  Mux(fb_out_notFull, 1.U, 0.U) //fbout has valid inst but not full
 
-    event_counters.io.event_signals(15) :=  Mux(dec_out_zero, 1.U, 0.U)  //decode output no valid inst
-    event_counters.io.event_signals(16) :=  Mux(dec_out_full, 1.U, 0.U)  //decode output has corewidth valid inst
-    event_counters.io.event_signals(17) :=  Mux(dec_out_notFull, 1.U, 0.U) //decode out has valid inst but not full
-    event_counters.io.event_signals(18) :=  Mux(dec_brmask_logic.io.is_full.reduce(_||_), 1.U, 0.U) //brmask full cycles
-    event_counters.io.event_signals(19) :=  PopCount(ren_stalls.asUInt)  //rename stall number
+  event_counters.io.event_signals(15) :=  Mux(dec_out_zero, 1.U, 0.U)  //decode output no valid inst
+  event_counters.io.event_signals(16) :=  Mux(dec_out_full, 1.U, 0.U)  //decode output has corewidth valid inst
+  event_counters.io.event_signals(17) :=  Mux(dec_out_notFull, 1.U, 0.U) //decode out has valid inst but not full
+  event_counters.io.event_signals(18) :=  Mux(dec_brmask_logic.io.is_full.reduce(_||_), 1.U, 0.U) //brmask full cycles
+  event_counters.io.event_signals(19) :=  PopCount(ren_stalls.asUInt)  //rename stall number
 
-    event_counters.io.event_signals(20) :=  Mux(dis_out_zero, 1.U, 0.U)  //dispatch output no valid inst
-    event_counters.io.event_signals(21) :=  Mux(dis_out_full, 1.U, 0.U)  //dispatch output has corewidth valid inst
-    event_counters.io.event_signals(22) :=  Mux(dis_out_notFull, 1.U, 0.U) //dispatch out has valid inst but not full
-    event_counters.io.event_signals(23) :=  PopCount(ldq_dis_stall.asUInt)  //ldq dispatch stall times
-    event_counters.io.event_signals(24) :=  PopCount(stq_dis_stall.asUInt)  //stq dispatch stall times
-    event_counters.io.event_signals(25) :=  Mux(rob_dis_stall, 1.U, 0.U)  //rob stall dispatch cycles
+  event_counters.io.event_signals(20) :=  Mux(dis_out_zero, 1.U, 0.U)  //dispatch output no valid inst
+  event_counters.io.event_signals(21) :=  Mux(dis_out_full, 1.U, 0.U)  //dispatch output has corewidth valid inst
+  event_counters.io.event_signals(22) :=  Mux(dis_out_notFull, 1.U, 0.U) //dispatch out has valid inst but not full
+  event_counters.io.event_signals(23) :=  PopCount(ldq_dis_stall.asUInt)  //ldq dispatch stall times
+  event_counters.io.event_signals(24) :=  PopCount(stq_dis_stall.asUInt)  //stq dispatch stall times
+  event_counters.io.event_signals(25) :=  Mux(rob_dis_stall, 1.U, 0.U)  //rob stall dispatch cycles
 
-    event_counters.io.event_signals(26) :=  PopCount(iss_valids.asUInt)  //issue int uop number
-    event_counters.io.event_signals(27) :=  Mux(iss_val_zero, 1.U, 0.U)  //issue output no valid inst
-    event_counters.io.event_signals(28) :=  Mux(iss_val_full, 1.U, 0.U)  //issue output has corewidth valid inst
-    event_counters.io.event_signals(29) :=  Mux(iss_val_notFull, 1.U, 0.U) //issue out has valid inst but not full
-    event_counters.io.event_signals(30) :=  PopCount(spec_miss_issuop.asUInt)  //valid mis-wakeup issue uop number
+  event_counters.io.event_signals(26) :=  PopCount(iss_valids.asUInt)  //issue int uop number
+  event_counters.io.event_signals(27) :=  Mux(iss_val_zero, 1.U, 0.U)  //issue output no valid inst
+  event_counters.io.event_signals(28) :=  Mux(iss_val_full, 1.U, 0.U)  //issue output has corewidth valid inst
+  event_counters.io.event_signals(29) :=  Mux(iss_val_notFull, 1.U, 0.U) //issue out has valid inst but not full
+  event_counters.io.event_signals(30) :=  PopCount(spec_miss_issuop.asUInt)  //valid mis-wakeup issue uop number
 
-    event_counters.io.event_signals(31) :=  PopCount(exe_is_ld.asUInt)       //execute ld number
-    event_counters.io.event_signals(32) :=  PopCount(exe_is_st.asUInt)       //execute st number
-    event_counters.io.event_signals(33) :=  io.lsu.dtlb_valid_access            //valid dtlb req number
-    event_counters.io.event_signals(34) :=  io.lsu.dtlb_miss_num              //dtlb miss number
-    event_counters.io.event_signals(35) :=  Mux(io.lsu.perf.tlbMiss, 1.U, 0.U)  //d-tlb miss
-    event_counters.io.event_signals(36) :=  io.lsu.dcache_valid_access   //valid dcache access number
-    event_counters.io.event_signals(37) :=  io.lsu.dcache_nack_num   //d-cache load & store nack number
-    event_counters.io.event_signals(38) :=  Mux(io.lsu.perf.acquire, 1.U, 0.U) //dcache send req to next level number
+  event_counters.io.event_signals(31) :=  PopCount(exe_is_ld.asUInt)       //execute ld number
+  event_counters.io.event_signals(32) :=  PopCount(exe_is_st.asUInt)       //execute st number
+  event_counters.io.event_signals(33) :=  io.lsu.dtlb_valid_access            //valid dtlb req number
+  event_counters.io.event_signals(34) :=  io.lsu.dtlb_miss_num              //dtlb miss number
+  event_counters.io.event_signals(35) :=  Mux(io.lsu.perf.tlbMiss, 1.U, 0.U)  //d-tlb miss
+  event_counters.io.event_signals(36) :=  io.lsu.dcache_valid_access   //valid dcache access number
+  event_counters.io.event_signals(37) :=  io.lsu.dcache_nack_num   //d-cache load & store nack number
+  event_counters.io.event_signals(38) :=  Mux(io.lsu.perf.acquire, 1.U, 0.U) //dcache send req to next level number
 
-    event_counters.io.event_signals(39) :=  PopCount(exe_is_br.asUInt)       //execute br number
-    event_counters.io.event_signals(40) :=  PopCount(exe_is_jalr.asUInt)   //execute jalr number
-    event_counters.io.event_signals(41) :=  PopCount(exe_is_ret.asUInt)     //execute jalr-ret number
-    event_counters.io.event_signals(42) :=  PopCount(exe_is_jalrcall.asUInt)  //execute jalr-call number
-    event_counters.io.event_signals(43) :=  Mux(exe_misp_br, 1.U, 0.U)       //exe misp br number
-    event_counters.io.event_signals(44) :=  Mux(exe_misp_jalr, 1.U, 0.U)   //exe misp jalr number
-    event_counters.io.event_signals(45) :=  Mux(exe_misp_ret, 1.U, 0.U)     //exe misp jalr-ret number
-    event_counters.io.event_signals(46) :=  Mux(exe_misp_jalrcall, 1.U, 0.U)  //exe misp jalr-call number
+  event_counters.io.event_signals(39) :=  PopCount(exe_is_br.asUInt)       //execute br number
+  event_counters.io.event_signals(40) :=  PopCount(exe_is_jalr.asUInt)   //execute jalr number
+  event_counters.io.event_signals(41) :=  PopCount(exe_is_ret.asUInt)     //execute jalr-ret number
+  event_counters.io.event_signals(42) :=  PopCount(exe_is_jalrcall.asUInt)  //execute jalr-call number
+  event_counters.io.event_signals(43) :=  Mux(exe_misp_br, 1.U, 0.U)       //exe misp br number
+  event_counters.io.event_signals(44) :=  Mux(exe_misp_jalr, 1.U, 0.U)   //exe misp jalr number
+  event_counters.io.event_signals(45) :=  Mux(exe_misp_ret, 1.U, 0.U)     //exe misp jalr-ret number
+  event_counters.io.event_signals(46) :=  Mux(exe_misp_jalrcall, 1.U, 0.U)  //exe misp jalr-call number
 
-    event_counters.io.event_signals(47) :=  PopCount(com_is_ld.asUInt)       //commit ld number
-    event_counters.io.event_signals(48) :=  PopCount(com_is_st.asUInt)       //commit st number
-    event_counters.io.event_signals(49) :=  PopCount(com_is_br.asUInt)       //commit br number
-    event_counters.io.event_signals(50) :=  PopCount(com_is_jalr.asUInt)   //commit jalr number
-    event_counters.io.event_signals(51) :=  PopCount(com_is_ret.asUInt)     //commit jalr-ret number
-    event_counters.io.event_signals(52) :=  PopCount(com_is_jalrcall.asUInt)  //commit jalr-call number
-    event_counters.io.event_signals(53) :=  PopCount(com_misp_br.asUInt)       //com misp br number
-    event_counters.io.event_signals(54) :=  PopCount(com_misp_jalr.asUInt)   //com misp jalr number
-    event_counters.io.event_signals(55) :=  PopCount(com_misp_ret.asUInt)     //com misp jalr-ret number
-    event_counters.io.event_signals(56) :=  PopCount(com_misp_jalrcall.asUInt)  //com misp jalr-call number
+  event_counters.io.event_signals(47) :=  PopCount(com_is_ld.asUInt)       //commit ld number
+  event_counters.io.event_signals(48) :=  PopCount(com_is_st.asUInt)       //commit st number
+  event_counters.io.event_signals(49) :=  PopCount(com_is_br.asUInt)       //commit br number
+  event_counters.io.event_signals(50) :=  PopCount(com_is_jalr.asUInt)   //commit jalr number
+  event_counters.io.event_signals(51) :=  PopCount(com_is_ret.asUInt)     //commit jalr-ret number
+  event_counters.io.event_signals(52) :=  PopCount(com_is_jalrcall.asUInt)  //commit jalr-call number
+  event_counters.io.event_signals(53) :=  PopCount(com_misp_br.asUInt)       //com misp br number
+  event_counters.io.event_signals(54) :=  PopCount(com_misp_jalr.asUInt)   //com misp jalr number
+  event_counters.io.event_signals(55) :=  PopCount(com_misp_ret.asUInt)     //com misp jalr-ret number
+  event_counters.io.event_signals(56) :=  PopCount(com_misp_jalrcall.asUInt)  //com misp jalr-call number
 
-    event_counters.io.event_signals(57) :=  Mux(io.ptw.perf.l2miss, 1.U, 0.U) //L2 TLB miss
-    event_counters.io.event_signals(58) :=  Mux(misalign_excpt, 1.U, 0.U)  //misalign_excpt
-    event_counters.io.event_signals(59) :=  Mux(lstd_pagefault, 1.U, 0.U)  //lstd_pagefault
-    event_counters.io.event_signals(60) :=  Mux(fetch_pagefault, 1.U, 0.U)  //fetch_pagefault
-    event_counters.io.event_signals(61) :=  Mux(mini_exception, 1.U, 0.U)  //mini_exception
-    event_counters.io.event_signals(62) :=  Mux(rob.io.commit.rollback, 1.U, 0.U)  //rollback_cycles
-  }
+  event_counters.io.event_signals(57) :=  Mux(io.ptw.perf.l2miss, 1.U, 0.U) //L2 TLB miss
+  event_counters.io.event_signals(58) :=  Mux(misalign_excpt, 1.U, 0.U)  //misalign_excpt
+  event_counters.io.event_signals(59) :=  Mux(lstd_pagefault, 1.U, 0.U)  //lstd_pagefault
+  event_counters.io.event_signals(60) :=  Mux(fetch_pagefault, 1.U, 0.U)  //fetch_pagefault
+  event_counters.io.event_signals(61) :=  Mux(mini_exception, 1.U, 0.U)  //mini_exception
+  event_counters.io.event_signals(62) :=  Mux(rob.io.commit.rollback, 1.U, 0.U)  //rollback_cycles
+  
 
   //topdown
   //-- first level
@@ -704,17 +696,16 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     iss_int_uops(w) := iss_valids(w) && !(io.lsu.ld_miss && (iss_uops(w).iw_p1_poisoned || iss_uops(w).iw_p2_poisoned))
   }
 
-  when (startCounter) {
-    //idq_uops_not_delivered.core
-    event_counters.io.event_signals(63) := PopCount(dec_uops_not_delivered.asUInt)   
+  //idq_uops_not_delivered.core
+  event_counters.io.event_signals(63) := PopCount(dec_uops_not_delivered.asUInt)   
 
-    //uops_issued.any
-    event_counters.io.event_signals(64) := PopCount(iss_int_uops.asUInt)   
-    event_counters.io.event_signals(65) := fp_pipeline.io.iss_fp_uops
+  //uops_issued.any
+  event_counters.io.event_signals(64) := PopCount(iss_int_uops.asUInt)   
+  event_counters.io.event_signals(65) := fp_pipeline.io.iss_fp_uops
 
-    //int_misc.recovery_cycles
-    event_counters.io.event_signals(66) := Mux(is_misc_recoverying, 1.U, 0.U)
-  }
+  //int_misc.recovery_cycles
+  event_counters.io.event_signals(66) := Mux(is_misc_recoverying, 1.U, 0.U)
+  
 
   //-- second level
   //--- BrMispredFraction: old counter is enough
@@ -746,29 +737,67 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   is_memstall_anyload := io.lsu.has_flight_ld && is_no_exe_cycle && !is_iq_empty
   is_memstall_stores := stq_dis_stall.reduce(_||_) && !is_memstall_anyload && (is_no_exe_cycle || is_one_exe_cycle) && !is_iq_empty
 
-  when (startCounter) {
-    //fetch latency
-    event_counters.io.event_signals(67) := Mux(is_fetch_lat_cause_cycle, 1.U, 0.U)
+  //fetch latency
+  event_counters.io.event_signals(67) := Mux(is_fetch_lat_cause_cycle, 1.U, 0.U)
 
-    //ExecutionStalls 
-    event_counters.io.event_signals(68) := Mux(is_no_exe_cycle, 1.U, 0.U)
-    event_counters.io.event_signals(69) := Mux(is_one_exe_cycle, 1.U, 0.U)
-    event_counters.io.event_signals(70) := Mux(is_iq_empty, 1.U, 0.U)
+  //ExecutionStalls 
+  event_counters.io.event_signals(68) := Mux(is_no_exe_cycle, 1.U, 0.U)
+  event_counters.io.event_signals(69) := Mux(is_one_exe_cycle, 1.U, 0.U)
+  event_counters.io.event_signals(70) := Mux(is_iq_empty, 1.U, 0.U)
 
-    //MemStalls
-    event_counters.io.event_signals(71) := Mux(is_memstall_anyload, 1.U, 0.U)
-    event_counters.io.event_signals(72) := Mux(is_memstall_stores, 1.U, 0.U)
+  //MemStalls
+  event_counters.io.event_signals(71) := Mux(is_memstall_anyload, 1.U, 0.U)
+  event_counters.io.event_signals(72) := Mux(is_memstall_stores, 1.U, 0.U)
 
-    //temp test for haosen
-    event_counters.io.event_signals(73) := PopCount(dec_fbundle_vals.asUInt) 
-    event_counters.io.event_signals(74) := PopCount(dec_valids.asUInt) 
-    event_counters.io.event_signals(75) := PopCount(dec_fire.asUInt) 
+  //temp test for haosen
+  event_counters.io.event_signals(73) := PopCount(dec_fbundle_vals.asUInt) 
+  event_counters.io.event_signals(74) := PopCount(dec_valids.asUInt) 
+  event_counters.io.event_signals(75) := PopCount(dec_fire.asUInt) 
+
+
+
+
+  val tip = Module(new Tip)
+  tip.io.arch_valids := rob.io.commit.arch_valids
+  tip.io.instr_valids := rob.io.commit.instr_valids
+  tip.io.misspeculated := rob.io.commit.misspeculated
+  tip.io.exception.valid := rob.io.com_xcpt.valid
+  tip.io.exception.badvaddr := rob.io.com_xcpt.bits.badvaddr
+  tip.io.cpu_cycle := csr.io.time.pad(64)
+  tip.io.uops := rob.io.commit.uops
+
+
+  when (overflow_event) {
+    when (tip.io.out.sample_valid) {
+      when (!TipSavedData) {
+          TipSavedData := true.B
+          assert(tip.io.out.sample_valid) 
+          /* machine cycle */
+          TipInfoRegs(0) := csr.io.time.pad(64) 
+          /* singals */
+          TipInfoRegs(1) := Cat(tip.io.out.sample_valid, 
+                                tip.io.out.stalled, tip.io.out.frontend, tip.io.out.flushes.exception,tip.io.out.flushes.flush, 
+                                tip.io.out.flushes.mispredicted, tip.io.out.oldestId, tip.io.out.valids(0),tip.io.out.valids(1),
+                                isUserMode.asBool
+                                ).asUInt
+          /* this is hardcode, MediumBoom retire at most two instructions every cycle */                      
+          /* instr 0 and corresponding pc */
+          TipInfoRegs(2) := tip.io.out.addrs(0)
+          /* instr 1 and corresponding pc */
+          TipInfoRegs(3) := tip.io.out.addrs(1)
+          printf("TIP::")
+          for(i <-0 until 5){
+            printf("%d ", TipInfoRegs(i))
+          }
+          printf("\n")
+          nowEventNum := wait4TipSampleValidCycles;
+          wait4TipSampleValidCycles := 0.U
+      }
+    }.otherwise
+    {
+      wait4TipSampleValidCycles := wait4TipSampleValidCycles + 1.U 
+    }
   }
-
-
-
-
-
   //-------------------------------------------------------------
   // **** Fetch Stage/Frontend ****
   //-------------------------------------------------------------
@@ -816,11 +845,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           io.ifu.redirect_pc  := csr.io.evec
           sampleHappen := 1.U   // set the register for ptrace detect the sample ecall
         }
-        printf("TIP:: maxEventNum:%d nowEventNum:%d, wait4TipSampleValidCycles:%d\n", maxEventNum, nowEventNum, wait4TipSampleValidCycles)
-        nowEventNum := wait4TipSampleValidCycles
-        maxEventNum := 0.U
-        wait4TipSampleValidCycles := 0.U
-        pfc_enable  := 0.U     // disable the performance counter
       }
       .otherwise {
         io.ifu.redirect_pc  := Mux(flush_typ === FlushTypes.eret, RegNext(RegNext(csr.io.evec)), csr.io.evec)
@@ -837,13 +861,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       when (RegNext(rob.io.flush.bits.isURet)) {
         switch (RegNext(rob.io.flush.bits.uret_target)) {
           is (0.U)  { io.ifu.redirect_pc := tempReg1 }
-          is (1.U)  { io.ifu.redirect_pc := tempReg2 }
-          is (2.U)  { io.ifu.redirect_pc := tempReg3 }
-          is (3.U)  { io.ifu.redirect_pc := tempReg4 }
         }
-        printf("TIP:: end of %d sample\n", TipSampleTimes)
-        TipWrite2TempReg := false.B
-        TipSampleTimes := TipSampleTimes + 1.U
       }
       .otherwise{
         io.ifu.redirect_pc := Mux(FlushTypes.useSamePC(flush_typ), flush_pc, flush_pc_next)
@@ -889,7 +907,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
     if(hasRecorder) {
       // val isRecorded = true.B 
-      val isRecorded = csr.io.status.prv === 0.U && isTargetProc
+      val isRecorded = csr.io.status.prv === 0.U
       when (record_entSel === RcdEvent_AllMisBranch) {
         event_recorder.io.event_val := isRecorded
         event_recorder.io.event_pc  := uop_maybe_pc(32, 1)
@@ -937,14 +955,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   //-------------------------------------------------------------
   //-------------------------------------------------------------
 
-  val tip = Module(new Tip)
-  tip.io.arch_valids := rob.io.commit.arch_valids
-  tip.io.instr_valids := rob.io.commit.instr_valids
-  tip.io.misspeculated := rob.io.commit.misspeculated
-  tip.io.exception.valid := rob.io.com_xcpt.valid
-  tip.io.exception.badvaddr := rob.io.com_xcpt.bits.badvaddr
-  tip.io.cpu_cycle := csr.io.time.pad(64)
-  tip.io.uops := rob.io.commit.uops
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------
@@ -978,55 +988,10 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
     dec_uops(w) := decode_units(w).io.deq.uop
 
-    when (overflow_event) {
-      when (tip.io.out.sample_valid) {
-        dec_uops(w).exception := true.B
-        dec_uops(w).exc_cause := Cause_OverFlow
-
-          when (!TipWrite2TempReg.asBool) {
-              TipWrite2TempReg := true.B 
-              // here we want to get the information in tip reg
-              val concated = Cat(tip.io.out.sample_valid,
-                                tip.io.out.stalled,
-                                tip.io.out.frontend,
-                                tip.io.out.flushes.exception,
-                                tip.io.out.flushes.flush,
-                                tip.io.out.flushes.mispredicted,
-                                tip.io.out.oldestId,
-                                tip.io.out.valids.asUInt,
-                                ).asUInt
-              tempReg2 := concated
-              /* this is hardcode, MediumBoom retire at most two instructions every cycle */
-              tempReg3 := tip.io.out.addrs(0)
-              tempReg4 := tip.io.out.addrs(1)
-              printf("TIP:: %d | 0x%x 0x%x 0x%x\n", debug_tsc_reg, tempReg2, tempReg3, tempReg4)
-        }
-
-      }.otherwise {
-
-        /* fixme: In tip, only sample target process? */
-
-        wait4TipSampleValidCycles := wait4TipSampleValidCycles + 1.U 
-        printf("TIP:: ---- sample is not valid, cycle: %d ------", wait4TipSampleValidCycles)
-        printf("%d | V:%b | [ S:%b | D: %b | F: [f:%b|b:%b|e:%b] | Id:%d ", 
-                debug_tsc_reg,
-                tip.io.out.sample_valid, 
-                tip.io.out.stalled, 
-                tip.io.out.frontend, 
-                tip.io.out.flushes.flush, 
-                tip.io.out.flushes.mispredicted, 
-                tip.io.out.flushes.exception, 
-                tip.io.out.oldestId);
-        for (i <- 0 until coreWidth) {
-              printf(" | %b pc:%x", 
-                tip.io.out.valids(i),
-                tip.io.out.addrs(i)
-              )
-          }
-          printf("\n")
-      }
+    when (overflow_event && TipSavedData) {
+          dec_uops(w).exception := true.B
+          dec_uops(w).exc_cause := Cause_OverFlow
     }
-
   }
 
   //-------------------------------------------------------------
@@ -1640,9 +1605,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           is (SetUCSR_SampleFuncAddr)  { exitFuncAddr  := rs1_data }
           is (SetUCSR_MaxPriv)       { pfc_maxPriv   := rs1_data(1,0) }
           is (SetUCSR_Temp1)         { tempReg1      := rs1_data }
-          is (SetUCSR_Temp2)         { tempReg2      := rs1_data }
-          is (SetUCSR_Temp3)         { tempReg3      := rs1_data }
-          is (SetUCSR_Temp4)         { tempReg4      := rs1_data }
           is (SetUCSR_EventSel)      { sampleEventSel  := rs1_data(2,0) }
           is (SetUCSR_PfcEnable)     { pfc_enable      := rs1_data(0,0) }
           is (SetUCSR_SampleHappen)  { sampleHappen    := rs1_data(31,0) }
@@ -1746,11 +1708,13 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           is (GetUCSR_ProcTag)   { iregfile.io.write_ports(w_cnt).bits.data := Cat(0.U(32.W), procTag) }
           is (GetUCSR_ExitNPC)   { iregfile.io.write_ports(w_cnt).bits.data := userExitPC }
           is (GetUCSR_Temp1)     { iregfile.io.write_ports(w_cnt).bits.data := tempReg1 }
-          is (GetUCSR_Temp2)     { iregfile.io.write_ports(w_cnt).bits.data := tempReg2 }
-          is (GetUCSR_Temp3)     { iregfile.io.write_ports(w_cnt).bits.data := tempReg3 }
-          is (GetUCSR_Temp4)     { iregfile.io.write_ports(w_cnt).bits.data := tempReg4 }
           is (GetUCSR_SampleHappen) { iregfile.io.write_ports(w_cnt).bits.data := Cat(0.U(32.W), sampleHappen) }
 
+          
+          is (GetUCSR_TIP_0)     { iregfile.io.write_ports(w_cnt).bits.data := TipInfoRegs(0)}
+          is (GetUCSR_TIP_1)     { iregfile.io.write_ports(w_cnt).bits.data := TipInfoRegs(1)}
+          is (GetUCSR_TIP_2)     { iregfile.io.write_ports(w_cnt).bits.data := TipInfoRegs(2)}
+          is (GetUCSR_TIP_3)     { iregfile.io.write_ports(w_cnt).bits.data := TipInfoRegs(3)}
           is (GetUCSR_SampleFuncAddr) { iregfile.io.write_ports(w_cnt).bits.data := exitFuncAddr }
           is (GetUCSR_MaxEvents)    { iregfile.io.write_ports(w_cnt).bits.data := maxEventNum }
           is (GetUCSR_NowEvents)    { iregfile.io.write_ports(w_cnt).bits.data := nowEventNum }
