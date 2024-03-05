@@ -771,6 +771,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     when (tip.io.out.sample_valid) {
       when (!TipSavedData) {
           TipSavedData := true.B
+          printf("TIP:: TipSavedData <- %x \n", TipSavedData.asUInt);
           assert(tip.io.out.sample_valid) 
           /* machine cycle */
           TipInfoRegs(0) := csr.io.time.pad(64) 
@@ -786,7 +787,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           /* instr 1 and corresponding pc */
           TipInfoRegs(3) := tip.io.out.addrs(1)
           printf("TIP::")
-          for(i <-0 until 5){
+          for(i <- 0 until 4){
             printf("%d ", TipInfoRegs(i))
           }
           printf("\n")
@@ -845,6 +846,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           io.ifu.redirect_pc  := csr.io.evec
           sampleHappen := 1.U   // set the register for ptrace detect the sample ecall
         }
+        printf("TIP:: successfully set overflow event, redirect pc to %x | %x | %x \n", io.ifu.redirect_pc, exitFuncAddr, csr.io.evec)
       }
       .otherwise {
         io.ifu.redirect_pc  := Mux(flush_typ === FlushTypes.eret, RegNext(RegNext(csr.io.evec)), csr.io.evec)
@@ -862,6 +864,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
         switch (RegNext(rob.io.flush.bits.uret_target)) {
           is (0.U)  { io.ifu.redirect_pc := tempReg1 }
         }
+        printf("TIP:: jump to tempReg1 %x %x\n",io.ifu.redirect_pc, tempReg1)
       }
       .otherwise{
         io.ifu.redirect_pc := Mux(FlushTypes.useSamePC(flush_typ), flush_pc, flush_pc_next)
@@ -988,7 +991,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
     dec_uops(w) := decode_units(w).io.deq.uop
 
-    when (overflow_event && TipSavedData) {
+    when (overflow_event) {
+          printf("TIP:: set inst to Cause_OverFlow, now TipSavedData %x\n", TipSavedData.asUInt)
           dec_uops(w).exception := true.B
           dec_uops(w).exc_cause := Cause_OverFlow
     }
@@ -1618,8 +1622,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
             nowEventNum := 0.U
           }
         }
-        
-        printf("set event value, pc: 0x%x, inst: 0x%x, tag: %d, value: 0x%x\n", rrd_uop.debug_pc, rrd_uop.inst, tag, rs1_data)
+        printf("procTag:%d, exitFuncAddr:%d, pfc_maxPriv:%d, sampleHappen:%d, pfc_enable:%d, maxEventNum:%d\n", 
+              procTag, exitFuncAddr, pfc_maxPriv,sampleHappen, pfc_enable,maxEventNum)        
       }
 
       iss_idx += 1
