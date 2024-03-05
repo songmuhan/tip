@@ -42,11 +42,11 @@ class SubEventCounter(readWidth: Int)(implicit p: Parameters) extends BoomModule
     }
   }
 
-  when (RegNext(io.reset_counter)) {
-    for (w <- 0 until 16) {
-      printf("w: %d, counter: %d\n", w.U, reg_counters(w) )
-    }
-  }
+  // when (RegNext(io.reset_counter)) {
+  //   for (w <- 0 until 16) {
+  //     printf("w: %d, counter: %d\n", w.U, reg_counters(w) )
+  //   }
+  // }
 
 }
 

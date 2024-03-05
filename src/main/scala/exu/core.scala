@@ -400,6 +400,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   val nowWarmupInsts  = RegInit(0.U(64.W))
   val nowEventNum     = RegInit(0.U(64.W))
+  val Tip_Cycle = RegInit(0.U(64.W))
+
 
   val wait4TipSampleValidCycles = RegInit(0.U(64.W))
   /* freeze tempReg once overflow_event && tip sample valid */
@@ -412,6 +414,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   val tempReg2  = RegInit(0.U(64.W))
   val tempReg3  = RegInit(0.U(64.W))
   val tempReg4  = RegInit(0.U(64.W))
+  val tempReg5  = RegInit(0.U(64.W))
 
   val isTargetProc = procTag === 0x1234567.U
   val startCounter = csr.io.status.prv <= pfc_maxPriv && isTargetProc && (pfc_enable === 1.U)
@@ -431,6 +434,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     val uop = rob.io.commit.uops(w)
     when (rob.io.commit.valids(w) && uop.ucsrInst && uop.inst(31, 20) === SpecialInst_RstPFC) { //tag == 1024, reset all counters
       event_counters.io.reset_counter := true.B
+      TipWrite2TempReg := false.B
+      TipSampleTimes := TipSampleTimes + 1.U
     }
   }
 
@@ -575,7 +580,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   val fetch_pagefault = csr.io.exception && (csr.io.cause === Causes.fetch_page_fault.U)
   val mini_exception = RegNext(rob.io.flush.valid && !rob.io.com_xcpt.valid && rob.io.com_xcpt.bits.cause === MINI_EXCEPTION_MEM_ORDERING)
 
-
+  /* always update tip cycle*/
+  Tip_Cycle := Tip_Cycle + 1.U
   //update nowWarmupInsts
   when (sampleValid) { //usemode
     switch (sampleEventSel){
@@ -585,7 +591,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       is (3.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.tlbMiss, 1.U, 0.U) }
       is (4.U)  { nowEventNum := nowEventNum + RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) } // instruction
     }
-    printf("wordValid, instnum: %d, eventnum: %d, maxnum: %d\n", nowWarmupInsts, nowEventNum, maxEventNum)
   }
 
   //connect signal to counters
@@ -816,10 +821,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           io.ifu.redirect_pc  := csr.io.evec
           sampleHappen := 1.U   // set the register for ptrace detect the sample ecall
         }
-        printf("TIP:: maxEventNum:%d nowEventNum:%d, wait4TipSampleValidCycles:%d\n", maxEventNum, nowEventNum, wait4TipSampleValidCycles)
-        nowEventNum := wait4TipSampleValidCycles
-        maxEventNum := 0.U
-        wait4TipSampleValidCycles := 0.U
         pfc_enable  := 0.U     // disable the performance counter
       }
       .otherwise {
@@ -841,9 +842,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           is (2.U)  { io.ifu.redirect_pc := tempReg3 }
           is (3.U)  { io.ifu.redirect_pc := tempReg4 }
         }
-        printf("TIP:: end of %d sample\n", TipSampleTimes)
         TipWrite2TempReg := false.B
-        TipSampleTimes := TipSampleTimes + 1.U
       }
       .otherwise{
         io.ifu.redirect_pc := Mux(FlushTypes.useSamePC(flush_typ), flush_pc, flush_pc_next)
@@ -967,6 +966,25 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   //-------------------------------------------------------------
   // Decoders
 
+  when (maxEventNum =/= 0.U && (Tip_Cycle > maxEventNum) ) {
+    when (tip.io.out.sample_valid){  
+          tempReg2 := csr.io.time.pad(64) - wait4TipSampleValidCycles
+          tempReg3 := Cat(tip.io.out.sample_valid, 
+                                  tip.io.out.stalled, tip.io.out.frontend, tip.io.out.flushes.exception,tip.io.out.flushes.flush, 
+                                  tip.io.out.flushes.mispredicted, tip.io.out.oldestId, tip.io.out.valids(0),tip.io.out.valids(1),
+                                  isUserMode.asBool
+                                  ).asUInt
+          tempReg4 := tip.io.out.addrs(0)   
+          tempReg5 := tip.io.out.addrs(1)
+          printf("TIP:: cycle:%d %x %x %x\n",RegNext(tempReg2), RegNext(tempReg3), RegNext(tempReg4), RegNext(tempReg5))
+          Tip_Cycle := wait4TipSampleValidCycles
+          wait4TipSampleValidCycles := 0.U
+    }.otherwise {
+      wait4TipSampleValidCycles := wait4TipSampleValidCycles + 1.U 
+    }
+  }
+  
+
   for (w <- 0 until coreWidth) {
     dec_valids(w)                      := io.ifu.fetchpacket.valid && dec_fbundle.uops(w).valid &&
                                           !dec_finished_mask(w)
@@ -979,52 +997,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dec_uops(w) := decode_units(w).io.deq.uop
 
     when (overflow_event) {
-      when (tip.io.out.sample_valid) {
         dec_uops(w).exception := true.B
         dec_uops(w).exc_cause := Cause_OverFlow
-
-          when (!TipWrite2TempReg.asBool) {
-              TipWrite2TempReg := true.B 
-              // here we want to get the information in tip reg
-              val concated = Cat(tip.io.out.sample_valid,
-                                tip.io.out.stalled,
-                                tip.io.out.frontend,
-                                tip.io.out.flushes.exception,
-                                tip.io.out.flushes.flush,
-                                tip.io.out.flushes.mispredicted,
-                                tip.io.out.oldestId,
-                                tip.io.out.valids.asUInt,
-                                ).asUInt
-              tempReg2 := concated
-              /* this is hardcode, MediumBoom retire at most two instructions every cycle */
-              tempReg3 := tip.io.out.addrs(0)
-              tempReg4 := tip.io.out.addrs(1)
-              printf("TIP:: %d | 0x%x 0x%x 0x%x\n", debug_tsc_reg, tempReg2, tempReg3, tempReg4)
-        }
-
-      }.otherwise {
-
-        /* fixme: In tip, only sample target process? */
-
-        wait4TipSampleValidCycles := wait4TipSampleValidCycles + 1.U 
-        printf("TIP:: ---- sample is not valid, cycle: %d ------", wait4TipSampleValidCycles)
-        printf("%d | V:%b | [ S:%b | D: %b | F: [f:%b|b:%b|e:%b] | Id:%d ", 
-                debug_tsc_reg,
-                tip.io.out.sample_valid, 
-                tip.io.out.stalled, 
-                tip.io.out.frontend, 
-                tip.io.out.flushes.flush, 
-                tip.io.out.flushes.mispredicted, 
-                tip.io.out.flushes.exception, 
-                tip.io.out.oldestId);
-        for (i <- 0 until coreWidth) {
-              printf(" | %b pc:%x", 
-                tip.io.out.valids(i),
-                tip.io.out.addrs(i)
-              )
-          }
-          printf("\n")
-      }
+        printf("TIP:: set to overflow, %x\n",TipWrite2TempReg.asUInt)
     }
 
   }
@@ -1644,7 +1619,16 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           is (SetUCSR_Temp3)         { tempReg3      := rs1_data }
           is (SetUCSR_Temp4)         { tempReg4      := rs1_data }
           is (SetUCSR_EventSel)      { sampleEventSel  := rs1_data(2,0) }
-          is (SetUCSR_PfcEnable)     { pfc_enable      := rs1_data(0,0) }
+          is (SetUCSR_PfcEnable)     { 
+              pfc_enable      := rs1_data(0,0)
+              Tip_Cycle :=0.U 
+              
+              tempReg2 := 0.U
+              tempReg3 := 0.U
+              tempReg4 := 0.U
+              tempReg5 := 0.U
+
+          }
           is (SetUCSR_SampleHappen)  { sampleHappen    := rs1_data(31,0) }
           is (SetUCSR_RcdSetting)    { record_setting  := rs1_data(31,0) }
           is (SetUCSR_WarmupInst)    { 
@@ -1655,9 +1639,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
             maxEventNum := rs1_data
             nowEventNum := 0.U
           }
-        }
-        
-        printf("set event value, pc: 0x%x, inst: 0x%x, tag: %d, value: 0x%x\n", rrd_uop.debug_pc, rrd_uop.inst, tag, rs1_data)
+        }        
       }
 
       iss_idx += 1
@@ -1735,9 +1717,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
         iregfile.io.write_ports(w_cnt).bits.data := wbdata
       }
 
-      when (wbresp.bits.uop.readCounter && wbresp.bits.uop.ldst =/= 0.U) {
-        printf("writeBackCounter, pc: 0x%x, tag: %d, ldst: %d, data: 0x%x\n", wbresp.bits.uop.debug_pc, wbresp.bits.uop.inst(31, 20), wbresp.bits.uop.ldst, wbdata)
-      }
+      // when (wbresp.bits.uop.readCounter && wbresp.bits.uop.ldst =/= 0.U) {
+      //   printf("writeBackCounter, pc: 0x%x, tag: %d, ldst: %d, data: 0x%x\n", wbresp.bits.uop.debug_pc, wbresp.bits.uop.inst(31, 20), wbresp.bits.uop.ldst, wbdata)
+      // }
 
 
       when (wbresp.bits.uop.ucsrInst && wbresp.bits.uop.ldst =/= 0.U ) {

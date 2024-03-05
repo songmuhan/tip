@@ -68,7 +68,7 @@ trait ScalarOpConstants
   val GetUCSR_Temp2         = 37.U(12.W)
   val GetUCSR_Temp3         = 38.U(12.W)
   val GetUCSR_Temp4         = 39.U(12.W)
-
+  val GetUCSR_Temp5         = 40.U(12.W)
   //for testing
   val GetUCSR_SampleFuncAddr  = 41.U(12.W)
   val GetUCSR_MaxEvents     = 42.U(12.W)
