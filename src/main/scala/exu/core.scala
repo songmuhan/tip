@@ -405,7 +405,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   val wait4TipSampleValidCycles = RegInit(0.U(64.W))
   /* freeze tempReg once overflow_event && tip sample valid */
-  val TipWrite2TempReg = RegInit(false.B)
   val TipSampleTimes   = RegInit(0.U(64.W))
 
   val tempReg1  = RegInit(0.U(64.W))
@@ -434,7 +433,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     val uop = rob.io.commit.uops(w)
     when (rob.io.commit.valids(w) && uop.ucsrInst && uop.inst(31, 20) === SpecialInst_RstPFC) { //tag == 1024, reset all counters
       event_counters.io.reset_counter := true.B
-      TipWrite2TempReg := false.B
       TipSampleTimes := TipSampleTimes + 1.U
     }
   }
@@ -590,6 +588,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       is (3.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.tlbMiss, 1.U, 0.U) }
       is (4.U)  { nowEventNum := nowEventNum + RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) } // instruction
     }
+  printf("TIP_Cycle:%d, nowEventNum:%d, maxEventNum:%d Overflow_event:%x\n",Tip_Cycle,nowEventNum,maxEventNum,overflow_event.asUInt)  
 
   //connect signal to counters
   for (w <- 0 until subECounterNum*16) {
@@ -819,6 +818,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           io.ifu.redirect_pc  := csr.io.evec
           sampleHappen := 1.U   // set the register for ptrace detect the sample ecall
         }
+        nowEventNum := 0.U
+        maxEventNum := 0.U
         pfc_enable  := 0.U     // disable the performance counter
       }
       .otherwise {
@@ -840,7 +841,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           is (2.U)  { io.ifu.redirect_pc := tempReg3 }
           is (3.U)  { io.ifu.redirect_pc := tempReg4 }
         }
-        TipWrite2TempReg := false.B
       }
       .otherwise{
         io.ifu.redirect_pc := Mux(FlushTypes.useSamePC(flush_typ), flush_pc, flush_pc_next)
@@ -997,7 +997,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     when (overflow_event) {
         dec_uops(w).exception := true.B
         dec_uops(w).exc_cause := Cause_OverFlow
-        printf("TIP:: set to overflow, %x\n",TipWrite2TempReg.asUInt)
+        printf("TIP:: set to overflow\n")
     }
 
   }
@@ -1617,16 +1617,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           is (SetUCSR_Temp3)         { tempReg3      := rs1_data }
           is (SetUCSR_Temp4)         { tempReg4      := rs1_data }
           is (SetUCSR_EventSel)      { sampleEventSel  := rs1_data(2,0) }
-          is (SetUCSR_PfcEnable)     { 
-              pfc_enable      := rs1_data(0,0)
-              Tip_Cycle :=0.U 
-              
-              tempReg2 := 0.U
-              tempReg3 := 0.U
-              tempReg4 := 0.U
-              tempReg5 := 0.U
-
-          }
+          is (SetUCSR_PfcEnable)     { pfc_enable      := rs1_data(0,0) }
           is (SetUCSR_SampleHappen)  { sampleHappen    := rs1_data(31,0) }
           is (SetUCSR_RcdSetting)    { record_setting  := rs1_data(31,0) }
           is (SetUCSR_WarmupInst)    { 
