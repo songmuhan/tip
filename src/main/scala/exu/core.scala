@@ -496,7 +496,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   //-------------------------------------------------------------
   // Decoders
-
   for (w <- 0 until coreWidth) {
     dec_valids(w)                      := io.ifu.fetchpacket.valid && dec_fbundle.uops(w).valid &&
                                           !dec_finished_mask(w)
@@ -576,6 +575,12 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   val dec_stallStart = RegInit(0.U(64.W))
   val dec_inStall = RegInit(false.B)
+
+  // printf("%d | dec ", debug_tsc_reg)
+  // for (w <- 0 until coreWidth ){
+  //   printf("| %x ", dec_uops(w).debug_pc)
+  // }
+  // printf("\n")
 
   when (dec_stalls.reduce(_||_) && !dec_inStall){
     dec_inStall := true.B
@@ -733,9 +738,29 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   io.lsu.fence_dmem := (dis_valids zip wait_for_empty_pipeline).map {case (v,w) => v && w} .reduce(_||_)
 
+  val dis_reason_rob = (0 until coreWidth).map( w => dis_valids(w) && !rob.io.ready)
+  val dis_reason_ren_stalls = (0 until coreWidth).map( w => dis_valids(w) && ren_stalls(w))
+  val dis_reason_ldq_full = (0 until coreWidth).map( w => dis_valids(w) && io.lsu.ldq_full(w) && dis_uops(w).uses_ldq)
+  val dis_reason_stq_full = (0 until coreWidth).map( w => dis_valids(w) && io.lsu.stq_full(w) && dis_uops(w).uses_stq)
+  val dis_reason_disp = (0 until coreWidth).map( w => dis_valids(w) && !dispatcher.io.ren_uops(w).ready)
+  val dis_reason_empty_pipeline = (0 until coreWidth).map( w => dis_valids(w) && wait_for_empty_pipeline(w))
+  val dis_reason_wait_rocc = (0 until coreWidth).map( w => dis_valids(w) && wait_for_rocc(w))
+  val dis_reason_rocc_alloc = (0 until coreWidth).map( w => dis_valids(w) && dis_rocc_alloc_stall(w))
+  val dis_reason_prior_slot_unique = (0 until coreWidth).map( w => dis_valids(w) && dis_prior_slot_unique(w))
+  val dis_reason_mispredict_b1 = (0 until coreWidth).map( w => dis_valids(w) && brupdate.b1.mispredict_mask =/= 0.U)
+  val dis_reason_mispredict_b2 = (0 until coreWidth).map( w => dis_valids(w) && brupdate.b2.mispredict)
+  val dis_reason_redirect_flush = (0 until coreWidth).map( w => dis_valids(w) && io.ifu.redirect_flush)
+
+
   val dis_stalls = dis_hazards.scanLeft(false.B) ((s,h) => s || h).takeRight(coreWidth)
   dis_fire := dis_valids zip dis_stalls map {case (v,s) => v && !s}
   dis_ready := !dis_stalls.last
+
+  // printf("%d | dis ", debug_tsc_reg)
+  // for (w <- 0 until coreWidth ){
+  //   printf("| %x ", dis_uops(w).debug_pc)
+  // }
+  // printf("\n")
 
   val dis_stallStart = RegInit(0.U(64.W))
   val dis_inStall = RegInit(false.B)
@@ -745,7 +770,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dis_stallStart := debug_tsc_reg
   }.elsewhen( !dis_stalls.reduce(_||_) && dis_inStall){
     dis_inStall := false.B
-    printf(" %d -> %d | dis | ", dis_stallStart, debug_tsc_reg)
+    printf(" %d -> %d | dis ", dis_stallStart, debug_tsc_reg)
     for ( w <- 0 until coreWidth ) {
       when(dis_valids(w)){
         printf("| %x ", dis_uops(w).debug_pc)
@@ -753,6 +778,13 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     }
     printf("\n");
   }
+
+  printf("%d | ",debug_tsc_reg)
+  printf("dec: %x,%x,%x,%x | ", dec_stalls(0).asUInt, dec_uops(0).debug_pc, dec_stalls(1).asUInt,dec_uops(1).debug_pc)
+  printf("ren: %x,%x | ", ren_stalls(0).asUInt, ren_stalls(1).asUInt)
+  printf("dis: %x,%x,%x,%x", dis_stalls(0).asUInt,dis_uops(0).debug_pc, dis_stalls(1).asUInt, dis_uops(1).debug_pc)
+  printf("\n")
+
 
 
 
