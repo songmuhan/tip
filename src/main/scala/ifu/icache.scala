@@ -60,6 +60,8 @@ class ICacheResp(val outer: ICache) extends Bundle
 {
   val data = UInt((outer.icacheParams.fetchBytes*8).W)
   val replay = Bool()
+  val hit = Bool()
+  val miss = Bool()
   val ae = Bool()
 }
 
@@ -104,6 +106,7 @@ object GetPropertyByHartId
  */
 class ICacheModule(outer: ICache) extends LazyModuleImp(outer)
   with HasBoomFrontendParameters
+  with HasBoomCoreParameters
 {
   val enableICacheDelay = tileParams.core.asInstanceOf[BoomCoreParams].enableICacheDelay
   val io = IO(new ICacheBundle(outer))
@@ -323,6 +326,18 @@ class ICacheModule(outer: ICache) extends LazyModuleImp(outer)
 
   io.resp.bits.data := s2_data
   io.resp.valid := s2_valid && s2_hit
+  io.resp.bits.hit := s2_hit
+  io.resp.bits.miss := s2_miss
+
+  val s1_vaddr = RegNext(s0_vaddr)
+  val s2_vaddr = RegNext(s1_vaddr)
+  val debug_tsc_reg = RegInit(0.U(xLen.W))
+  debug_tsc_reg := debug_tsc_reg + 1.U
+  when(s2_valid && s2_miss) {
+    printf("%d | [ICACHE] | icache_miss | 0x%x\n", debug_tsc_reg, s2_vaddr);
+  }
+  
+
 
   tl_out.a.valid := s2_miss && !refill_valid && !io.s2_kill
   tl_out.a.bits := edge_out.Get(

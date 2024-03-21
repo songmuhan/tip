@@ -574,6 +574,27 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   val dec_stalls = dec_hazards.scanLeft(false.B) ((s,h) => s || h).takeRight(coreWidth)
   dec_fire := (0 until coreWidth).map(w => dec_valids(w) && !dec_stalls(w))
 
+  val dec_stallStart = RegInit(0.U(64.W))
+  val dec_inStall = RegInit(false.B)
+
+  when (dec_stalls.reduce(_||_) && !dec_inStall){
+    dec_inStall := true.B
+    dec_stallStart := debug_tsc_reg
+  }.elsewhen( !dec_stalls.reduce(_||_) && dec_inStall){
+    dec_inStall := false.B
+    printf(" %d -> %d | dec  ", dec_stallStart, debug_tsc_reg)
+    for ( w <- 0 until coreWidth ) {
+      when(dec_valids(w)){
+        printf("| %x ", dec_uops(w).debug_pc)
+      }
+    }
+    printf("\n");
+  }
+
+
+
+
+
   // all decoders are empty and ready for new instructions
   dec_ready := dec_fire.last
 
@@ -629,6 +650,15 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   dis_uops := rename_stage.io.ren2_uops
   dis_valids := rename_stage.io.ren2_mask
   ren_stalls := rename_stage.io.ren_stalls
+
+
+  when ( ren_stalls.reduce(_||_) ){
+    printf("%d | rename  ", debug_tsc_reg)
+    printf("\n");
+  }
+
+
+
 
 
   /**
@@ -706,6 +736,26 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   val dis_stalls = dis_hazards.scanLeft(false.B) ((s,h) => s || h).takeRight(coreWidth)
   dis_fire := dis_valids zip dis_stalls map {case (v,s) => v && !s}
   dis_ready := !dis_stalls.last
+
+  val dis_stallStart = RegInit(0.U(64.W))
+  val dis_inStall = RegInit(false.B)
+
+  when (dis_stalls.reduce(_||_) && !dis_inStall){
+    dis_inStall := true.B
+    dis_stallStart := debug_tsc_reg
+  }.elsewhen( !dis_stalls.reduce(_||_) && dis_inStall){
+    dis_inStall := false.B
+    printf(" %d -> %d | dis | ", dis_stallStart, debug_tsc_reg)
+    for ( w <- 0 until coreWidth ) {
+      when(dis_valids(w)){
+        printf("| %x ", dis_uops(w).debug_pc)
+      }
+    }
+    printf("\n");
+  }
+
+
+
 
   //-------------------------------------------------------------
   // LDQ/STQ Allocation Logic
