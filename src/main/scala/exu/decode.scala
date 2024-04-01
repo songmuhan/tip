@@ -597,6 +597,46 @@ class DecodeUnit(implicit p: Parameters) extends BoomModule
 
   //-------------------------------------------------------------
 
+  uop.tea_psv.dcache_miss := false.B
+  uop.tea_psv.dtlb_pmiss := false.B
+  uop.tea_psv.dtlb_smiss := false.B
+  uop.tea_psv.branch_miss := false.B
+  uop.tea_psv.lsq_full := false.B
+  uop.memory_latency.foreach(_ := 0.U)
+
+  if (boomParams.enableSoftwarePrefetchRoCC) {
+    // Decode an integer load instruction to register 0 as a prefetch
+    // instruction. One could also use custom instructions but this
+    // makes it easier by reusing loads that do not have an impact on
+    // the architecture and one saves messing with compilers.
+
+    // !!! This is not compliant with the RISC-V standard !!!
+    // load instruction to register 0 are valid instructions and should
+    // be able to throw exceptions. This does not happen anymore with
+    // this extension! Use custom instructions if you care about this!
+
+    val prefetch_insn = cs.uses_ldq && // uses load queue
+      !cs.is_amo && // not atomic
+      !cs.is_fence && // not a fence
+      !cs.is_fencei && // not a fencei
+      (cs.iq_type === IQT_MEM) && // issue queue memory
+      (cs.mem_cmd === M_XRD) && // int load
+      (cs.dst_type === RT_FIX) && // int register file
+      (inst(RD_MSB, RD_LSB) === 0.U) // destination register 0
+
+    when(prefetch_insn) {
+      uop.dst_rtype := RT_X
+      uop.ldst_val := false.B
+      uop.mem_cmd := M_PFR
+      uop.uses_ldq := false.B
+      uop.uses_stq := false.B
+      uop.iq_type := IQT_INT
+      uop.fu_code := FU_CSR
+      uop.uopc := uopROCC
+    }
+  }
+
+
   io.deq.uop := uop
 }
 
