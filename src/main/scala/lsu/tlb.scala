@@ -242,8 +242,8 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
   val cmd_lrsc           = widthMap(w => usingAtomics.B && io.req(w).bits.cmd.isOneOf(M_XLR, M_XSC))
   val cmd_amo_logical    = widthMap(w => usingAtomics.B && isAMOLogical(io.req(w).bits.cmd))
   val cmd_amo_arithmetic = widthMap(w => usingAtomics.B && isAMOArithmetic(io.req(w).bits.cmd))
-  val cmd_read           = widthMap(w => isRead(io.req(w).bits.cmd))
-  val cmd_write          = widthMap(w => isWrite(io.req(w).bits.cmd))
+  val cmd_read           = widthMap(w => isRead(io.req(w).bits.cmd) || io.req(w).bits.cmd === M_PFR)
+  val cmd_write          = widthMap(w => isWrite(io.req(w).bits.cmd) || io.req(w).bits.cmd === M_PFW)
   val cmd_write_perms    = widthMap(w => cmd_write(w) ||
     coreParams.haveCFlush.B && io.req(w).bits.cmd === M_FLUSH_ALL) // not a write, but needs write permissions
 
@@ -302,6 +302,8 @@ class NBDTLB(instruction: Boolean, lgMaxSize: Int, cfg: TLBConfig)(implicit edge
     io.resp(w).prefetchable := (prefetchable_array(w) & hits(w)).orR && edge.manager.managers.forall(m => !m.supportsAcquireB || m.supportsHint).B
     io.resp(w).miss  := do_refill || tlb_miss(w) || multipleHits(w)
     io.resp(w).paddr := Cat(ppn(w), io.req(w).bits.vaddr(pgIdxBits-1, 0))
+    io.resp(w).tlb_miss := usingVM.B && tlb_miss(w)
+    io.resp(w).ptw_fired := usingVM.B && io.req(w).fire() && (state === s_ready) && tlb_miss(w)
   }
 
   io.ptw.req.valid := state === s_request

@@ -413,6 +413,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
                                 flush_pc, flush_pc_next)
 
     }
+    io.ifu.redirect_memory_order_xcpt := RegNext(rob.io.flush.bits.memory_order_xcpt)
     io.ifu.redirect_ftq_idx := RegNext(rob.io.flush.bits.ftq_idx)
   } .elsewhen (brupdate.b2.mispredict && !RegNext(rob.io.flush.valid)) {
     val block_pc = AlignPCToBoundary(io.ifu.get_pc(1).pc, icBlockBytes)
@@ -711,9 +712,11 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   // LDQ/STQ Allocation Logic
 
   for (w <- 0 until coreWidth) {
+    val lsq_full = dis_valids(w) && !dis_uops(w).exception && ((dis_uops(w).uses_ldq && io.lsu.ldq_full(w)) || (dis_uops(w).uses_stq && io.lsu.stq_full(w)))
     // Dispatching instructions request load/store queue entries when they can proceed.
     dis_uops(w).ldq_idx := io.lsu.dis_ldq_idx(w)
     dis_uops(w).stq_idx := io.lsu.dis_stq_idx(w)
+    dis_uops(w).tea_psv.lsq_full := RegNext(lsq_full)
   }
 
   //-------------------------------------------------------------
@@ -1280,6 +1283,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   // LSU <> ROB
   rob.io.lsu_clr_bsy    := io.lsu.clr_bsy
   rob.io.lsu_clr_unsafe := io.lsu.clr_unsafe
+  rob.io.lsu_clr_bsy_psv := io.lsu.clr_bsy_psv
   rob.io.lxcpt          <> io.lsu.lxcpt
 
   assert (!(csr.io.singleStep), "[core] single-step is unsupported.")
@@ -1395,6 +1399,26 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   coreMonitorBundle.clock  := clock
   coreMonitorBundle.reset  := reset
 
+  //-------------------------------------------------------------
+  if (DEBUG_PRINTF) {
+    val exception = rob.io.com_xcpt.valid
+    val committing = !exception && !rob.io.commit.blocked && rob.io.commit.arch_valids.reduce(_||_)
+    val validHead = !exception && !rob.io.commit.blocked && rob.io.commit.instr_valids.reduce(_||_)
+    val robPopulated = validHead && !RegNext(validHead)
+    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+    when (committing || exception || robPopulated) {
+      printf("%d |   [CORE] | rob         | [%b%b%b]", debug_tsc_reg, committing, robPopulated, exception)
+      for (i <- 0 until coreWidth) {
+        printf(" | [%b%b] 0x%x DASM(0x%x)",
+          rob.io.commit.arch_valids(i),
+          rob.io.commit.instr_valids(i),
+          pcFromUOp(rob.io.commit.uops(i)),
+          instrFromUOp(rob.io.commit.uops(i)))
+      }
+      printf("\n")
+    }
+  }
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

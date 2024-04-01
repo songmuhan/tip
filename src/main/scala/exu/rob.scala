@@ -33,6 +33,7 @@ import freechips.rocketchip.util.Str
 
 import boom.common._
 import boom.util._
+import boom.lsu.LSUClearPSV
 
 /**
  * IO bundle to interact with the ROB
@@ -70,7 +71,8 @@ class RobIo(
   // Unbusying ports for stores.
   // +1 for fpstdata
   val lsu_clr_bsy      = Input(Vec(memWidth + 1, Valid(UInt(robAddrSz.W))))
-
+  val lsu_clr_bsy_psv = Input(Vec(memWidth + 1, new LSUClearPSV))
+  
   // Port for unmarking loads/stores as speculation hazards..
   val lsu_clr_unsafe   = Input(Vec(memWidth, Valid(UInt(robAddrSz.W))))
 
@@ -120,13 +122,14 @@ class CommitSignals(implicit p: Parameters) extends BoomBundle
   val arch_valids = Vec(retireWidth, Bool())
   val uops        = Vec(retireWidth, new MicroOp())
   val fflags      = Valid(UInt(5.W))
-
+  val instr_valids  = Vec(retireWidth, Bool()) // These instructions are valid
   // These come a cycle later
   val debug_insts = Vec(retireWidth, UInt(32.W))
 
   // Perform rollback of rename state (in conjuction with commit.uops).
   val rbk_valids = Vec(retireWidth, Bool())
   val rollback   = Bool()
+  val blocked    = Bool()
 
   val debug_wdata = Vec(retireWidth, UInt(xLen.W))
 }
@@ -147,6 +150,7 @@ class CommitExceptionSignals(implicit p: Parameters) extends BoomBundle
 // The ROB needs to tell the FTQ if there's a pipeline flush (and what type)
 // so the FTQ can drive the frontend with the correct redirected PC.
   val flush_typ  = FlushTypes()
+  val memory_order_xcpt = Bool()
 }
 
 /**
@@ -329,6 +333,16 @@ class Rob(
       rob_predicated(rob_tail)   := false.B
       rob_fflags(w)(rob_tail)    := 0.U
 
+      if (DEBUG_PRINTF) {
+        def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+        def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+        printf("%d |    [ROB] | dispatch    | 0x%x DASM(0x%x)\n",
+          io.debug_tsc,
+          pcFromUOp(io.enq_uops(w)),
+          instrFromUOp(io.enq_uops(w))
+        )
+      }
+
       assert (rob_val(rob_tail) === false.B, "[rob] overwriting a valid entry.")
       assert ((io.enq_uops(w).rob_idx >> log2Ceil(coreWidth)) === rob_tail)
     } .elsewhen (io.enq_valids.reduce(_|_) && !rob_val(rob_tail)) {
@@ -346,6 +360,23 @@ class Rob(
         rob_bsy(row_idx)      := false.B
         rob_unsafe(row_idx)   := false.B
         rob_predicated(row_idx)  := wb_resp.bits.predicated
+        if (DEBUG_PRINTF) {
+          def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0),  uop.debug_inst)
+          def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+          printf("%d |    [ROB] | write_back  | 0x%x DASM(0x%x)\n",
+            io.debug_tsc,
+            pcFromUOp(wb_uop),
+            instrFromUOp(wb_uop),
+          )
+        }
+
+        // LSU gives us miss information of the loads, stores are handled separately
+        when (wb_resp.bits.uop.uses_ldq) {
+          rob_uop(row_idx).tea_psv.dcache_miss := wb_uop.tea_psv.dcache_miss
+          rob_uop(row_idx).tea_psv.dtlb_pmiss := wb_uop.tea_psv.dtlb_pmiss
+          rob_uop(row_idx).tea_psv.dtlb_smiss := wb_uop.tea_psv.dtlb_smiss
+        }
+        rob_uop(row_idx).memory_latency.foreach(_ := wb_uop.memory_latency.getOrElse(0.U))
       }
       // TODO check that fflags aren't overwritten
       // TODO check that the wb is to a valid ROB entry, give it a time stamp
@@ -356,13 +387,28 @@ class Rob(
     }
 
     // Stores have a separate method to clear busy bits
-    for (clr_rob_idx <- io.lsu_clr_bsy) {
+    for ((clr_rob_idx, clr_rob_psv) <- io.lsu_clr_bsy.zip(io.lsu_clr_bsy_psv)) {
       when (clr_rob_idx.valid && MatchBank(GetBankIdx(clr_rob_idx.bits))) {
         val cidx = GetRowIdx(clr_rob_idx.bits)
         rob_bsy(cidx)    := false.B
         rob_unsafe(cidx) := false.B
         assert (rob_val(cidx) === true.B, "[rob] store writing back to invalid entry.")
         assert (rob_bsy(cidx) === true.B, "[rob] store writing back to a not-busy entry.")
+        
+        rob_uop(cidx).tea_psv.dcache_miss := false.B
+        rob_uop(cidx).tea_psv.dtlb_pmiss := clr_rob_psv.dtlb_pmiss
+        rob_uop(cidx).tea_psv.dtlb_smiss := clr_rob_psv.dtlb_smiss
+
+        if (DEBUG_PRINTF) {
+          def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+          def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+          printf("%d |    [ROB] | clr_bsy     | 0x%x DASM(0x%x)\n",
+            io.debug_tsc,
+            pcFromUOp(rob_uop(cidx)),
+            instrFromUOp(rob_uop(cidx)),
+          )
+        }
+
       }
     }
     for (clr <- io.lsu_clr_unsafe) {
@@ -409,6 +455,7 @@ class Rob(
     io.commit.arch_valids(w) := will_commit(w) && !rob_predicated(com_idx)
     io.commit.uops(w)   := rob_uop(com_idx)
     io.commit.debug_insts(w) := rob_debug_inst_rdata(w)
+    io.commit.instr_valids(w) := rob_val(com_idx)
 
     // We unbusy branches in b1, but its easier to mark the taken/provider src in b2,
     // when the branch might be committing
@@ -417,6 +464,7 @@ class Rob(
       GetRowIdx(io.brupdate.b2.uop.rob_idx) === com_idx) {
       io.commit.uops(w).debug_fsrc := BSRC_C
       io.commit.uops(w).taken      := io.brupdate.b2.taken
+      io.commit.uops(w).tea_psv.branch_miss := true.B
     }
 
 
@@ -467,6 +515,7 @@ class Rob(
       MatchBank(GetBankIdx(io.brupdate.b2.uop.rob_idx))) {
       rob_uop(GetRowIdx(io.brupdate.b2.uop.rob_idx)).debug_fsrc := BSRC_C
       rob_uop(GetRowIdx(io.brupdate.b2.uop.rob_idx)).taken      := io.brupdate.b2.taken
+      rob_uop(GetRowIdx(io.brupdate.b2.uop.rob_idx)).tea_psv.branch_miss := true.B
     }
 
     // -----------------------------------------------
@@ -539,6 +588,7 @@ class Rob(
   var block_commit = (rob_state =/= s_normal) && (rob_state =/= s_wait_till_empty) || RegNext(exception_thrown) || RegNext(RegNext(exception_thrown))
   var will_throw_exception = false.B
   var block_xcpt   = false.B
+  io.commit.blocked := block_commit
 
   for (w <- 0 until coreWidth) {
     will_throw_exception = (can_throw_exception(w) && !block_commit && !block_xcpt) || will_throw_exception
@@ -587,7 +637,7 @@ class Rob(
                                                 flush_commit && flush_uop.uopc === uopERET,
                                                 refetch_inst)
 
-
+  io.flush.bits.memory_order_xcpt := exception_thrown && is_mini_exception
   // -----------------------------------------------
   // FP Exceptions
   // send fflags bits to the CSRFile to accrue

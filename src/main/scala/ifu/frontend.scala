@@ -40,6 +40,10 @@ class FrontendResp(implicit p: Parameters) extends BoomBundle()(p) {
   // tsrc provides the prediction TO this packet
   val fsrc = UInt(BSRC_SZ.W)
   val tsrc = UInt(BSRC_SZ.W)
+  val icache_miss = Bool()
+  val itlb_pmiss = Bool()
+  val itlb_smiss = Bool()
+  val memory_order_xcpt = Bool()
 }
 
 class GlobalHistory(implicit p: Parameters) extends BoomBundle()(p)
@@ -247,6 +251,11 @@ class FetchBundle(implicit p: Parameters) extends BoomBundle
   val fsrc    = UInt(BSRC_SZ.W)
   // Source of the prediction to this bundle
   val tsrc    = UInt(BSRC_SZ.W)
+
+  val icache_miss = Bool()
+  val itlb_pmiss = Bool()
+  val itlb_smiss = Bool()
+  val memory_order_xcpt = Bool()
 }
 
 
@@ -280,6 +289,7 @@ class BoomFrontendIO(implicit p: Parameters) extends BoomBundle
   val redirect_pc      = Output(UInt()) // Where do we redirect to?
   val redirect_ftq_idx = Output(UInt()) // Which ftq entry should we reset to?
   val redirect_ghist   = Output(new GlobalHistory) // What are we setting as the global history?
+  val redirect_memory_order_xcpt = Output(Bool())
 
   val commit = Valid(UInt(ftqSz.W))
 
@@ -357,6 +367,10 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val s0_replay_ppc  = Wire(UInt())
   val s0_s1_use_f3_bpd_resp = WireInit(false.B)
 
+  val s0_itlb_pmiss        = WireInit(false.B)
+  val s0_itlb_smiss        = WireInit(false.B)
+  val s0_icache_miss       = WireInit(false.B)
+  val s0_memory_order_xcpt = WireInit(false.B)
 
 
 
@@ -365,6 +379,10 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_vpc     := io_reset_vector
     s0_ghist   := (0.U).asTypeOf(new GlobalHistory)
     s0_tsrc    := BSRC_C
+    s0_itlb_pmiss        := false.B
+    s0_itlb_smiss        := false.B
+    s0_icache_miss       := false.B
+    s0_memory_order_xcpt := false.B
   }
 
   icache.io.req.valid     := s0_valid
@@ -385,6 +403,9 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val s1_is_sfence = RegNext(s0_is_sfence)
   val f1_clear     = WireInit(false.B)
   val s1_tsrc      = RegNext(s0_tsrc)
+  val s1_icache_miss       = RegNext(s0_icache_miss)
+  val s1_memory_order_xcpt = RegNext(s0_memory_order_xcpt)
+  
   tlb.io.req.valid      := (s1_valid && !s1_is_replay && !f1_clear) || s1_is_sfence
   tlb.io.req.bits.cmd   := DontCare
   tlb.io.req.bits.vaddr := s1_vpc
@@ -396,6 +417,8 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   tlb.io.kill           := false.B
 
   val s1_tlb_miss = !s1_is_replay && tlb.io.resp.miss
+  val s1_itlb_pmiss = RegNext(s0_itlb_pmiss) || tlb.io.resp.ptw_fired
+  val s1_itlb_smiss = RegNext(s0_itlb_smiss) || tlb.io.resp.tlb_miss
   val s1_tlb_resp = Mux(s1_is_replay, RegNext(s0_replay_resp), tlb.io.resp)
   val s1_ppc  = Mux(s1_is_replay, RegNext(s0_replay_ppc), tlb.io.resp.paddr)
   val s1_bpd_resp = bpd.io.resp.f1
@@ -433,6 +456,11 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_vpc       := f1_predicted_target
     s0_ghist     := f1_predicted_ghist
     s0_is_replay := false.B
+    
+    s0_itlb_pmiss        := false.B
+    s0_itlb_smiss        := false.B
+    s0_icache_miss       := false.B
+    s0_memory_order_xcpt := false.B
   }
 
   // --------------------------------------------------------
@@ -449,6 +477,12 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val f2_clear = WireInit(false.B)
   val s2_tlb_resp = RegNext(s1_tlb_resp)
   val s2_tlb_miss = RegNext(s1_tlb_miss)
+  
+  val s2_itlb_pmiss        = RegNext(s1_itlb_pmiss)
+  val s2_itlb_smiss        = RegNext(s1_itlb_smiss)
+  val s2_icache_miss       = RegNext(s1_icache_miss)
+  val s2_memory_order_xcpt = RegNext(s1_memory_order_xcpt)
+  
   val s2_is_replay = RegNext(s1_is_replay) && s2_valid
   val s2_xcpt = s2_valid && (s2_tlb_resp.ae.inst || s2_tlb_resp.pf.inst) && !s2_is_replay
   val f3_ready = Wire(Bool())
@@ -480,11 +514,32 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
 
   val f2_correct_f1_ghist = s1_ghist =/= f2_predicted_ghist && enableGHistStallRepair.B
 
-  when ((s2_valid && !icache.io.resp.valid) ||
-        (s2_valid && icache.io.resp.valid && !f3_ready)) {
+  if (DEBUG_PRINTF) {
+    val debug_tsc_reg = RegInit(0.U(xLen.W))
+    debug_tsc_reg := debug_tsc_reg + 1.U
+    when (s2_valid && !f2_clear && ((icache.io.resp.valid && icache.io.resp.bits.hit) || ((s2_tlb_resp.ae.inst || s2_tlb_resp.pf.inst) && !s2_tlb_miss)) && (s2_itlb_pmiss || s2_itlb_smiss)) {
+      when (s2_itlb_pmiss) {
+        printf("%d | [FRONTE] | itlb_miss!  | 0x%x\n", debug_tsc_reg, s2_vpc);
+      } .otherwise {
+        printf("%d | [FRONTE] | itlb_miss   | 0x%x\n", debug_tsc_reg, s2_vpc);
+      }
+    }
+  }
+
+
+  // TEA changed how the icache responds, now valid must be evaluated together with hit
+  // in order to capture hits and misses correctly
+  when((s2_valid && !(icache.io.resp.valid && icache.io.resp.bits.hit)) ||
+    (s2_valid && (icache.io.resp.valid && icache.io.resp.bits.hit) && !f3_ready)) {
     s0_valid := (!s2_tlb_resp.ae.inst && !s2_tlb_resp.pf.inst) || s2_is_replay || s2_tlb_miss
     s0_vpc   := s2_vpc
-    s0_is_replay := s2_valid && icache.io.resp.valid
+    s0_is_replay := s2_valid && (icache.io.resp.valid && icache.io.resp.bits.hit)
+
+    s0_itlb_pmiss  := s2_itlb_pmiss
+    s0_itlb_smiss  := s2_itlb_smiss
+    s0_icache_miss := (s2_icache_miss || (icache.io.resp.valid && !icache.io.resp.bits.hit))
+    s0_memory_order_xcpt := s2_memory_order_xcpt
+
     // When this is not a replay (it queried the BPDs, we should use f3 resp in the replaying s1)
     s0_s1_use_f3_bpd_resp := !s2_is_replay
     s0_ghist := s2_ghist
@@ -504,6 +559,10 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
       s0_ghist     := f2_predicted_ghist
       s2_fsrc      := BSRC_2
       s0_tsrc      := BSRC_2
+      s0_itlb_pmiss        := false.B
+      s0_itlb_smiss        := false.B
+      s0_icache_miss       := false.B
+      s0_memory_order_xcpt := false.B
     }
   }
   s0_replay_bpd_resp := f2_bpd_resp
@@ -528,7 +587,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val f4_ready = Wire(Bool())
   f3_ready := f3.io.enq.ready
   f3.io.enq.valid   := (s2_valid && !f2_clear &&
-    (icache.io.resp.valid || ((s2_tlb_resp.ae.inst || s2_tlb_resp.pf.inst) && !s2_tlb_miss))
+    ((icache.io.resp.valid && icache.io.resp.bits.hit) || ((s2_tlb_resp.ae.inst || s2_tlb_resp.pf.inst) && !s2_tlb_miss))
   )
   f3.io.enq.bits.pc := s2_vpc
   f3.io.enq.bits.data  := Mux(s2_xcpt, 0.U, icache.io.resp.bits.data)
@@ -537,6 +596,19 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   f3.io.enq.bits.xcpt := s2_tlb_resp
   f3.io.enq.bits.fsrc := s2_fsrc
   f3.io.enq.bits.tsrc := s2_tsrc
+
+  f3.io.enq.bits.itlb_pmiss := s2_itlb_pmiss
+  f3.io.enq.bits.itlb_smiss := (s2_itlb_smiss && !s2_itlb_pmiss)
+  f3.io.enq.bits.icache_miss := s2_icache_miss
+  f3.io.enq.bits.memory_order_xcpt := s2_memory_order_xcpt
+
+  if (DEBUG_PRINTF) {
+    val debug_tsc_reg = RegInit(0.U(xLen.W))
+    debug_tsc_reg := debug_tsc_reg + 1.U
+    when (f3.io.enq.fire) {
+      printf("%d | [FRONTE] | fetched     | 0x%x\n", debug_tsc_reg, f3.io.enq.bits.pc);
+    }
+  }
 
   // RAS takes a cycle to read
   val ras_read_idx = RegInit(0.U(log2Ceil(nRasEntries).W))
@@ -584,6 +656,11 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   f3_fetch_bundle.fsrc := f3_imemresp.fsrc
   f3_fetch_bundle.tsrc := f3_imemresp.tsrc
   f3_fetch_bundle.shadowed_mask := f3_shadowed_mask
+
+  f3_fetch_bundle.itlb_pmiss := f3_imemresp.itlb_pmiss
+  f3_fetch_bundle.itlb_smiss := f3_imemresp.itlb_smiss
+  f3_fetch_bundle.icache_miss := f3_imemresp.icache_miss
+  f3_fetch_bundle.memory_order_xcpt := f3_imemresp.memory_order_xcpt
 
   // Tracks trailing 16b of previous fetch packet
   val f3_prev_half    = Reg(UInt(16.W))
@@ -836,6 +913,11 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
       s0_ghist     := f3_predicted_ghist
       s0_tsrc      := BSRC_3
 
+      s0_itlb_pmiss        := false.B
+      s0_itlb_smiss        := false.B
+      s0_icache_miss       := false.B
+      s0_memory_order_xcpt := false.B
+
       f3_fetch_bundle.fsrc := BSRC_3
     }
   }
@@ -964,6 +1046,11 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_is_replay := false.B
     s0_is_sfence := true.B
 
+    s0_itlb_pmiss        := false.B
+    s0_itlb_smiss        := false.B
+    s0_memory_order_xcpt := false.B
+    s0_icache_miss       := false.B
+
   }.elsewhen (io.cpu.redirect_flush) {
     fb.io.clear := true.B
     f4_clear    := true.B
@@ -978,6 +1065,11 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_ghist     := io.cpu.redirect_ghist
     s0_tsrc      := BSRC_C
     s0_is_replay := false.B
+
+    s0_itlb_pmiss        := false.B
+    s0_itlb_smiss        := false.B
+    s0_icache_miss       := false.B
+    s0_memory_order_xcpt := io.cpu.redirect_memory_order_xcpt
 
     ftq.io.redirect.valid := io.cpu.redirect_val
     ftq.io.redirect.bits  := io.cpu.redirect_ftq_idx

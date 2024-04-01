@@ -54,6 +54,7 @@ import freechips.rocketchip.util.Str
 import boom.common._
 import boom.exu.{BrUpdateInfo, Exception, FuncUnitResp, CommitSignals, ExeUnitResp}
 import boom.util.{BoolToChar, AgePriorityEncoder, IsKilledByBranch, GetNewBrMask, WrapInc, IsOlder, UpdateBrMask}
+import freechips.rocketchip.rocket.isPrefetch
 
 class LSUExeIO(implicit p: Parameters) extends BoomBundle()(p)
 {
@@ -70,6 +71,7 @@ class BoomDCacheReq(implicit p: Parameters) extends BoomBundle()(p)
   val addr  = UInt(coreMaxAddrBits.W)
   val data  = Bits(coreDataBits.W)
   val is_hella = Bool() // Is this the hellacache req? If so this is not tracked in LDQ or STQ
+  val is_hella_prft = Bool() // this response can be ignored
 }
 
 class BoomDCacheResp(implicit p: Parameters) extends BoomBundle()(p)
@@ -77,6 +79,7 @@ class BoomDCacheResp(implicit p: Parameters) extends BoomBundle()(p)
 {
   val data = Bits(coreDataBits.W)
   val is_hella = Bool()
+  val is_hella_prft = Bool() // this response can be ignored
 }
 
 class LSUDMemIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
@@ -108,6 +111,11 @@ class LSUDMemIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
 
 }
 
+class LSUClearPSV(implicit p: Parameters) extends BoomBundle()(p) {
+  val dtlb_pmiss = Bool()
+  val dtlb_smiss = Bool()
+}
+
 class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
 {
   val exe = Vec(memWidth, new LSUExeIO)
@@ -127,7 +135,7 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
   // Stores clear busy bit when stdata is received
   // memWidth for int, 1 for fp (to avoid back-pressure fpstdat)
   val clr_bsy         = Output(Vec(memWidth + 1, Valid(UInt(robAddrSz.W))))
-
+  val clr_bsy_psv     = Output(Vec(memWidth + 1, new LSUClearPSV))
   // Speculatively safe load (barring memory ordering failure)
   val clr_unsafe      = Output(Vec(memWidth, Valid(UInt(robAddrSz.W))))
 
@@ -226,7 +234,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
           stq_tail === stq_execute_head,
             "stq_execute_head got off track.")
 
-  val h_ready :: h_s1 :: h_s2 :: h_s2_nack :: h_wait :: h_replay :: h_dead :: Nil = Enum(7)
+  val h_ready :: h_s1 :: h_s2 :: h_s2_nack :: h_s2_xcpt :: h_wait :: h_replay_s0 :: h_replay_s1 :: h_dead :: Nil = Enum(9)
   // s1 : do TLB, if success and not killed, fire request go to h_s2
   //      store s1_data to register
   //      if tlb miss, go to s2_nack
@@ -290,11 +298,13 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   for (w <- 0 until coreWidth)
   {
-    ldq_full = WrapInc(ld_enq_idx, numLdqEntries) === ldq_head
+    // https://github.com/riscv-boom/riscv-boom/issues/557
+    ldq_full = (ld_enq_idx === ldq_head) && ldq(ldq_head).valid
     io.core.ldq_full(w)    := ldq_full
     io.core.dis_ldq_idx(w) := ld_enq_idx
 
-    stq_full = WrapInc(st_enq_idx, numStqEntries) === stq_head
+    // https://github.com/riscv-boom/riscv-boom/issues/557
+    stq_full = (st_enq_idx === stq_head) && stq(stq_head).valid    
     io.core.stq_full(w)    := stq_full
     io.core.dis_stq_idx(w) := st_enq_idx
 
@@ -712,6 +722,26 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                                         exe_tlb_vaddr(w)(corePgIdxBits-1,0)))
   val exe_tlb_uncacheable = widthMap(w => !(dtlb.io.resp(w).cacheable))
 
+  val exe_tlb_primary_miss = widthMap(w => dtlb.io.req(w).fire && dtlb.io.resp(w).ptw_fired)
+  val exe_tlb_secondary_miss = widthMap(w => dtlb.io.req(w).fire && dtlb.io.resp(w).tlb_miss)
+  val exe_tlb_xcpt = widthMap(w => dtlb.io.req(w).valid && (dtlb.io.resp(w).ma.ld || dtlb.io.resp(w).ma.st ||
+      dtlb.io.resp(w).pf.ld || dtlb.io.resp(w).pf.st || dtlb.io.resp(w).ae.ld || dtlb.io.resp(w).ae.st ||
+      dtlb.io.resp(w).gf.ld || dtlb.io.resp(w).gf.st))
+
+  if (DEBUG_PRINTF) {
+    for (w <- 0 until memWidth) {
+      when(exe_tlb_primary_miss(w) || exe_tlb_secondary_miss(w)) {
+        def instrFromUOp(uop: MicroOp) = if (uop.is_rvc == true.B) uop.debug_inst(15, 0) else uop.debug_inst
+        def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits - 1, 0)
+        when(exe_tlb_primary_miss(w)) {
+          printf("%d |    [LSU] | dtlb_miss!  | 0x%x from 0x%x DASM(0x%x)\n", io.core.tsc_reg, exe_tlb_vaddr(w), pcFromUOp(exe_tlb_uop(w)), instrFromUOp(exe_tlb_uop(w)))
+        } .otherwise {
+          printf("%d |    [LSU] | dtlb_miss   | 0x%x from 0x%x DASM(0x%x)\n", io.core.tsc_reg, exe_tlb_vaddr(w), pcFromUOp(exe_tlb_uop(w)), instrFromUOp(exe_tlb_uop(w)))
+        }
+      }
+    }
+  }
+
   for (w <- 0 until memWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
 
@@ -762,7 +792,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     dmem_req(w).bits.addr  := 0.U
     dmem_req(w).bits.data  := 0.U
     dmem_req(w).bits.is_hella := false.B
-
+    dmem_req(w).bits.is_hella_prft := false.B
     io.dmem.s1_kill(w) := false.B
 
     when (will_fire_load_incoming(w)) {
@@ -804,7 +834,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     } .elsewhen (will_fire_hella_incoming(w)) {
       assert(hella_state === h_s1)
 
-      dmem_req(w).valid               := !io.hellacache.s1_kill && (!exe_tlb_miss(w) || hella_req.phys)
+      dmem_req(w).valid               := !io.hellacache.s1_kill && (hella_req.phys || (!exe_tlb_miss(w) && !exe_tlb_xcpt(w)))
       dmem_req(w).bits.addr           := exe_tlb_paddr(w)
       dmem_req(w).bits.data           := (new freechips.rocketchip.rocket.StoreGen(
         hella_req.size, 0.U,
@@ -814,12 +844,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       dmem_req(w).bits.uop.mem_size   := hella_req.size
       dmem_req(w).bits.uop.mem_signed := hella_req.signed
       dmem_req(w).bits.is_hella       := true.B
-
+      dmem_req(w).bits.is_hella_prft  := isPrefetch(hella_req.cmd)
       hella_paddr := exe_tlb_paddr(w)
     }
       .elsewhen (will_fire_hella_wakeup(w))
     {
-      assert(hella_state === h_replay)
+      assert(hella_state === h_replay_s0)
       dmem_req(w).valid               := true.B
       dmem_req(w).bits.addr           := hella_paddr
       dmem_req(w).bits.data           := (new freechips.rocketchip.rocket.StoreGen(
@@ -830,6 +860,22 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       dmem_req(w).bits.uop.mem_size   := hella_req.size
       dmem_req(w).bits.uop.mem_signed := hella_req.signed
       dmem_req(w).bits.is_hella       := true.B
+      dmem_req(w).bits.is_hella_prft  := isPrefetch(hella_req.cmd)
+    }
+
+    dmem_req(w).bits.uop.memory_latency.foreach(_ := io.core.tsc_reg)
+
+    if (DEBUG_PRINTF) {
+      def instrFromUOp(uop: MicroOp) = if (uop.is_rvc == true.B) uop.debug_inst(15, 0) else uop.debug_inst
+      def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+      when(dmem_req_fire(w)) {
+        printf("%d |    [LSU] | dmem_req    | 0x%x @ 0x%x DASM(0x%x)\n",
+          io.core.tsc_reg,
+          dmem_req(w).bits.addr,
+          pcFromUOp(dmem_req(w).bits.uop),
+          instrFromUOp(dmem_req(w).bits.uop)
+        )
+      }
     }
 
     //-------------------------------------------------------------
@@ -845,6 +891,13 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
       assert(!(will_fire_load_incoming(w) && ldq_incoming_e(w).bits.addr.valid),
         "[lsu] Incoming load is overwriting a valid address")
+
+      when (exe_tlb_primary_miss(w)) {
+        ldq(ldq_idx).bits.uop.tea_psv.dtlb_pmiss := true.B
+        ldq(ldq_idx).bits.uop.tea_psv.dtlb_smiss := false.B
+      } .elsewhen(exe_tlb_secondary_miss(w) && !ldq(ldq_idx).bits.uop.tea_psv.dtlb_pmiss) {
+        ldq(ldq_idx).bits.uop.tea_psv.dtlb_smiss := true.B
+      }
     }
 
     when (will_fire_sta_incoming(w) || will_fire_stad_incoming(w) || will_fire_sta_retry(w))
@@ -860,6 +913,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       assert(!(will_fire_sta_incoming(w) && stq_incoming_e(w).bits.addr.valid),
         "[lsu] Incoming store is overwriting a valid address")
 
+      when (exe_tlb_primary_miss(w)) {
+        stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss := true.B
+        stq(stq_idx).bits.uop.tea_psv.dtlb_smiss := false.B
+      } .elsewhen(exe_tlb_secondary_miss(w) && !stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss) {
+        stq(stq_idx).bits.uop.tea_psv.dtlb_smiss := true.B
+      }
     }
 
     //-------------------------------------------------------------
@@ -932,11 +991,16 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val clr_bsy_valid   = RegInit(widthMap(w => false.B))
   val clr_bsy_rob_idx = Reg(Vec(memWidth, UInt(robAddrSz.W)))
   val clr_bsy_brmask  = Reg(Vec(memWidth, UInt(maxBrCount.W)))
+  val clr_bsy_dtlb_pmiss = RegInit(widthMap(w => false.B))
+  val clr_bsy_dtlb_smiss = RegInit(widthMap(w => false.B))
 
   for (w <- 0 until memWidth) {
     clr_bsy_valid   (w) := false.B
     clr_bsy_rob_idx (w) := 0.U
     clr_bsy_brmask  (w) := 0.U
+
+    clr_bsy_dtlb_pmiss (w) := false.B
+    clr_bsy_dtlb_smiss (w) := false.B
 
 
     when (fired_stad_incoming(w)) {
@@ -946,6 +1010,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                             !IsKilledByBranch(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
       clr_bsy_rob_idx (w) := mem_stq_incoming_e(w).bits.uop.rob_idx
       clr_bsy_brmask  (w) := GetNewBrMask(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
+
+      val stq_idx = mem_stq_incoming_e(w).bits.uop.stq_idx
+      clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
+      clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
+
     } .elsewhen (fired_sta_incoming(w)) {
       clr_bsy_valid   (w) := mem_stq_incoming_e(w).valid            &&
                              mem_stq_incoming_e(w).bits.data.valid  &&
@@ -954,6 +1023,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                             !IsKilledByBranch(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
       clr_bsy_rob_idx (w) := mem_stq_incoming_e(w).bits.uop.rob_idx
       clr_bsy_brmask  (w) := GetNewBrMask(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
+      val stq_idx = mem_stq_incoming_e(w).bits.uop.stq_idx
+      clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
+      clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
     } .elsewhen (fired_std_incoming(w)) {
       clr_bsy_valid   (w) := mem_stq_incoming_e(w).valid                 &&
                              mem_stq_incoming_e(w).bits.addr.valid       &&
@@ -962,10 +1034,15 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                             !IsKilledByBranch(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
       clr_bsy_rob_idx (w) := mem_stq_incoming_e(w).bits.uop.rob_idx
       clr_bsy_brmask  (w) := GetNewBrMask(io.core.brupdate, mem_stq_incoming_e(w).bits.uop)
+      val stq_idx = mem_stq_incoming_e(w).bits.uop.stq_idx
+      clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
+      clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
     } .elsewhen (fired_sfence(w)) {
       clr_bsy_valid   (w) := (w == 0).B // SFence proceeds down all paths, only allow one to clr the rob
       clr_bsy_rob_idx (w) := mem_incoming_uop(w).rob_idx
       clr_bsy_brmask  (w) := GetNewBrMask(io.core.brupdate, mem_incoming_uop(w))
+      clr_bsy_dtlb_pmiss (w) := mem_incoming_uop(w).tea_psv.dtlb_pmiss
+      clr_bsy_dtlb_smiss (w) := mem_incoming_uop(w).tea_psv.dtlb_smiss
     } .elsewhen (fired_sta_retry(w)) {
       clr_bsy_valid   (w) := mem_stq_retry_e.valid            &&
                              mem_stq_retry_e.bits.data.valid  &&
@@ -974,20 +1051,29 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                             !IsKilledByBranch(io.core.brupdate, mem_stq_retry_e.bits.uop)
       clr_bsy_rob_idx (w) := mem_stq_retry_e.bits.uop.rob_idx
       clr_bsy_brmask  (w) := GetNewBrMask(io.core.brupdate, mem_stq_retry_e.bits.uop)
+      val stq_idx = mem_stq_retry_e.bits.uop.stq_idx
+      clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
+      clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
     }
 
     io.core.clr_bsy(w).valid := clr_bsy_valid(w) &&
                                !IsKilledByBranch(io.core.brupdate, clr_bsy_brmask(w)) &&
                                !io.core.exception && !RegNext(io.core.exception) && !RegNext(RegNext(io.core.exception))
     io.core.clr_bsy(w).bits  := clr_bsy_rob_idx(w)
+    io.core.clr_bsy_psv(w).dtlb_pmiss  := clr_bsy_dtlb_pmiss(w)
+    io.core.clr_bsy_psv(w).dtlb_smiss  := clr_bsy_dtlb_smiss(w)
   }
 
   val stdf_clr_bsy_valid   = RegInit(false.B)
   val stdf_clr_bsy_rob_idx = Reg(UInt(robAddrSz.W))
   val stdf_clr_bsy_brmask  = Reg(UInt(maxBrCount.W))
+  val stdf_clr_bsy_dtlb_pmiss = RegInit(false.B)
+  val stdf_clr_bsy_dtlb_smiss = RegInit(false.B)
   stdf_clr_bsy_valid   := false.B
   stdf_clr_bsy_rob_idx := 0.U
   stdf_clr_bsy_brmask  := 0.U
+  stdf_clr_bsy_dtlb_pmiss := false.B
+  stdf_clr_bsy_dtlb_smiss := false.B
   when (fired_stdf_incoming) {
     val s_idx = mem_stdf_uop.stq_idx
     stdf_clr_bsy_valid   := stq(s_idx).valid                 &&
@@ -997,6 +1083,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
                             !IsKilledByBranch(io.core.brupdate, mem_stdf_uop)
     stdf_clr_bsy_rob_idx := mem_stdf_uop.rob_idx
     stdf_clr_bsy_brmask  := GetNewBrMask(io.core.brupdate, mem_stdf_uop)
+    stdf_clr_bsy_dtlb_pmiss := stq(s_idx).bits.uop.tea_psv.dtlb_pmiss
+    stdf_clr_bsy_dtlb_smiss := stq(s_idx).bits.uop.tea_psv.dtlb_smiss
   }
 
 
@@ -1007,6 +1095,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   io.core.clr_bsy(memWidth).bits  := stdf_clr_bsy_rob_idx
 
 
+  io.core.clr_bsy_psv(memWidth).dtlb_pmiss := stdf_clr_bsy_dtlb_pmiss
+  io.core.clr_bsy_psv(memWidth).dtlb_smiss := stdf_clr_bsy_dtlb_smiss
 
   // Task 2: Do LD-LD. ST-LD searches for ordering failures
   //         Do LD-ST search for forwarding opportunities
@@ -1281,6 +1371,17 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val dmem_resp_fired = WireInit(widthMap(w => false.B))
 
   for (w <- 0 until memWidth) {
+    if (DEBUG_PRINTF) {
+      when(io.dmem.nack(w).valid) {
+        def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+        def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits - 1, 0)
+        printf("%d |    [LSU] | dmem_nack   | 0x%x DASM(0x%x)\n",
+          io.core.tsc_reg,
+          pcFromUOp(io.dmem.resp(w).bits.uop),
+          instrFromUOp(io.dmem.resp(w).bits.uop)
+        )
+      }
+    }
     // Handle nacks
     when (io.dmem.nack(w).valid)
     {
@@ -1303,9 +1404,27 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         }
       }
     }
+    if (DEBUG_PRINTF) {
+      when(io.dmem.resp(w).valid) {
+        def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+
+        def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits - 1, 0)
+
+        printf("%d |    [LSU] | dmem_resp   | 0x%x DASM(0x%x)\n",
+          io.core.tsc_reg,
+          pcFromUOp(io.dmem.resp(w).bits.uop),
+          instrFromUOp(io.dmem.resp(w).bits.uop)
+        )
+      }
+    }
+
     // Handle the response
     when (io.dmem.resp(w).valid)
     {
+      val memory_latency = boomParams.enableMemoryLatencyTracking match {
+        case true => io.core.tsc_reg - io.dmem.resp(w).bits.uop.memory_latency.getOrElse(io.core.tsc_reg)
+        case _ => DontCare
+      }
       when (io.dmem.resp(w).bits.uop.uses_ldq)
       {
         assert(!io.dmem.resp(w).bits.is_hella)
@@ -1319,6 +1438,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         io.core.exe(w).iresp.bits.data := io.dmem.resp(w).bits.data
         io.core.exe(w).fresp.valid     := send_fresp
         io.core.exe(w).fresp.bits.data := io.dmem.resp(w).bits.data
+
+        io.core.exe(w).iresp.bits.uop.tea_psv.dcache_miss := io.dmem.resp(w).bits.uop.tea_psv.dcache_miss
+        io.core.exe(w).iresp.bits.uop.memory_latency.foreach(_ := memory_latency)
+        io.core.exe(w).fresp.bits.uop.tea_psv.dcache_miss := io.dmem.resp(w).bits.uop.tea_psv.dcache_miss
+        io.core.exe(w).fresp.bits.uop.memory_latency.foreach(_ := memory_latency)
 
         assert(send_iresp ^ send_fresp)
         dmem_resp_fired(w) := true.B
@@ -1335,6 +1459,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
           io.core.exe(w).iresp.valid     := true.B
           io.core.exe(w).iresp.bits.uop  := stq(io.dmem.resp(w).bits.uop.stq_idx).bits.uop
           io.core.exe(w).iresp.bits.data := io.dmem.resp(w).bits.data
+
+          io.core.exe(w).iresp.bits.uop.tea_psv.dcache_miss := io.dmem.resp(w).bits.uop.tea_psv.dcache_miss
+          io.core.exe(w).iresp.bits.uop.memory_latency.foreach(_ := memory_latency)
 
           stq(io.dmem.resp(w).bits.uop.stq_idx).bits.debug_wb_data := io.dmem.resp(w).bits.data
         }
@@ -1368,7 +1495,21 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       io.core.exe(w).iresp.bits.data := loadgen.data
       io.core.exe(w).fresp.bits.data := loadgen.data
 
+      io.core.exe(w).iresp.bits.uop.memory_latency.foreach(_ := 0.U)
+      io.core.exe(w).fresp.bits.uop.memory_latency.foreach(_ := 0.U)
+
       when (data_ready && live) {
+
+        if (DEBUG_PRINTF) {
+          def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+          def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+          printf("%d |    [LSU] | ldst_fw     | 0x%x DASM(0x%x)\n",
+            io.core.tsc_reg,
+            pcFromUOp(forward_uop),
+            instrFromUOp(forward_uop)
+          )
+        }
+
         ldq(f_idx).bits.succeeded := data_ready
         ldq(f_idx).bits.forward_std_val := true.B
         ldq(f_idx).bits.forward_stq_idx := wb_forward_stq_idx(w)
@@ -1535,60 +1676,121 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   } .elsewhen (hella_state === h_s1) {
     can_fire_hella_incoming(memWidth-1) := true.B
 
+    val dtlb_xcpt = !hella_req.phys && (dtlb.io.resp(memWidth-1).ma.ld || dtlb.io.resp(memWidth-1).ma.st ||
+      dtlb.io.resp(memWidth-1).ae.ld || dtlb.io.resp(memWidth-1).ae.st ||
+      dtlb.io.resp(memWidth-1).pf.ld || dtlb.io.resp(memWidth-1).pf.st ||
+      dtlb.io.resp(memWidth-1).gf.ld || dtlb.io.resp(memWidth-1).gf.st)
+
     hella_data := io.hellacache.s1_data
-    hella_xcpt := dtlb.io.resp(memWidth-1)
+
+    hella_xcpt.ma.ld := dtlb.io.resp(memWidth-1).ma.ld
+    hella_xcpt.ma.st := dtlb.io.resp(memWidth-1).ma.st
+    hella_xcpt.ae.ld := dtlb.io.resp(memWidth-1).ae.ld
+    hella_xcpt.ae.st := dtlb.io.resp(memWidth-1).ae.st
+    hella_xcpt.pf.ld := dtlb.io.resp(memWidth-1).pf.ld
+    hella_xcpt.pf.st := dtlb.io.resp(memWidth-1).pf.st
+    hella_xcpt.gf.ld := dtlb.io.resp(memWidth-1).gf.ld
+    hella_xcpt.gf.st := dtlb.io.resp(memWidth-1).gf.st
+
 
     when (io.hellacache.s1_kill) {
-      when (will_fire_hella_incoming(memWidth-1) && dmem_req_fire(memWidth-1)) {
+      when (!isPrefetch(hella_req.cmd) && (will_fire_hella_incoming(memWidth-1) && dmem_req_fire(memWidth-1))) {
         hella_state := h_dead
       } .otherwise {
         hella_state := h_ready
       }
     } .elsewhen (will_fire_hella_incoming(memWidth-1) && dmem_req_fire(memWidth-1)) {
       hella_state := h_s2
+    } .elsewhen (dtlb_xcpt) {
+      hella_state := h_s2_xcpt
     } .otherwise {
       hella_state := h_s2_nack
     }
   } .elsewhen (hella_state === h_s2_nack) {
+    // Memory request hasn't been sent
     io.hellacache.s2_nack := true.B
     hella_state := h_ready
-  } .elsewhen (hella_state === h_s2) {
-    io.hellacache.s2_xcpt := hella_xcpt
-    when (io.hellacache.s2_kill || hella_xcpt.asUInt =/= 0.U) {
+  } .elsewhen(hella_state === h_s2_xcpt) {
+    // Memory request hasn't been sent
+    when (!isPrefetch(hella_req.cmd)) {
+      io.hellacache.s2_xcpt := hella_xcpt
+      hella_state := h_ready
+    } .elsewhen(io.hellacache.s2_kill) {
+      hella_state := h_ready
+    } .otherwise {
+      // Prefetch request, act as it was sent
+      // h_dead will return a response next cycle
       hella_state := h_dead
+    }
+  } .elsewhen (hella_state === h_s2) {
+    // Memory request was sent
+    when (io.hellacache.s2_kill) {
+      when (!isPrefetch(hella_req.cmd)) {
+        hella_state := h_dead
+      } .otherwise {
+        hella_state := h_ready
+      }
     } .otherwise {
       hella_state := h_wait
     }
   } .elsewhen (hella_state === h_wait) {
-    for (w <- 0 until memWidth) {
-      when (io.dmem.resp(w).valid && io.dmem.resp(w).bits.is_hella) {
-        hella_state := h_ready
+    // First enter this state 2 cycles after dmem request!
+    val hella_nack = (0 until memWidth).map(w => io.dmem.nack(w).valid && io.dmem.nack(w).bits.is_hella)
 
-        io.hellacache.resp.valid       := true.B
-        io.hellacache.resp.bits.addr   := hella_req.addr
-        io.hellacache.resp.bits.tag    := hella_req.tag
-        io.hellacache.resp.bits.cmd    := hella_req.cmd
-        io.hellacache.resp.bits.signed := hella_req.signed
-        io.hellacache.resp.bits.size   := hella_req.size
-        io.hellacache.resp.bits.data   := io.dmem.resp(w).bits.data
-      } .elsewhen (io.dmem.nack(w).valid && io.dmem.nack(w).bits.is_hella) {
-        hella_state := h_replay
+    when (hella_nack.reduce(_||_)) {
+      hella_state := h_replay_s0
+    } .elsewhen(isPrefetch(hella_req.cmd)) {
+      // Just craft a response, there are so many modules that apparently require it...
+      hella_state := h_ready
+      io.hellacache.resp.valid := true.B
+      io.hellacache.resp.bits.addr := hella_req.addr
+      io.hellacache.resp.bits.tag := hella_req.tag
+      io.hellacache.resp.bits.cmd := hella_req.cmd
+      io.hellacache.resp.bits.signed := hella_req.signed
+      io.hellacache.resp.bits.size := hella_req.size
+      io.hellacache.resp.bits.data := 0.U
+    } .otherwise {
+      for (w <- 0 until memWidth) {
+        when(io.dmem.resp(w).valid && io.dmem.resp(w).bits.is_hella && !io.dmem.resp(w).bits.is_hella_prft) {
+          hella_state := h_ready
+          io.hellacache.resp.valid := true.B
+          io.hellacache.resp.bits.addr := hella_req.addr
+          io.hellacache.resp.bits.tag := hella_req.tag
+          io.hellacache.resp.bits.cmd := hella_req.cmd
+          io.hellacache.resp.bits.signed := hella_req.signed
+          io.hellacache.resp.bits.size := hella_req.size
+          io.hellacache.resp.bits.data := io.dmem.resp(w).bits.data
+        }
       }
     }
-  } .elsewhen (hella_state === h_replay) {
+  } .elsewhen (hella_state === h_replay_s0) {
     can_fire_hella_wakeup(memWidth-1) := true.B
-
     when (will_fire_hella_wakeup(memWidth-1) && dmem_req_fire(memWidth-1)) {
-      hella_state := h_wait
+      hella_state := h_replay_s1
     }
+  } .elsewhen(hella_state === h_replay_s1) {
+    hella_state := h_wait
   } .elsewhen (hella_state === h_dead) {
-    for (w <- 0 until memWidth) {
-      when (io.dmem.resp(w).valid && io.dmem.resp(w).bits.is_hella) {
-        hella_state := h_ready
+    // We only end up here if a memory request was sent
+    // or a response is expected from a prefetch
+    when (isPrefetch(hella_req.cmd)) {
+      hella_state := h_ready
+      io.hellacache.resp.valid := true.B
+      io.hellacache.resp.bits.addr := hella_req.addr
+      io.hellacache.resp.bits.tag := hella_req.tag
+      io.hellacache.resp.bits.cmd := hella_req.cmd
+      io.hellacache.resp.bits.signed := hella_req.signed
+      io.hellacache.resp.bits.size := hella_req.size
+      io.hellacache.resp.bits.data := 0.U
+    } .otherwise {
+      for (w <- 0 until memWidth) {
+        when(io.dmem.resp(w).valid && io.dmem.resp(w).bits.is_hella && !io.dmem.resp(w).bits.is_hella_prft) {
+          hella_state := h_ready
+        }
       }
     }
   }
-
+  
   //-------------------------------------------------------------
   // Exception / Reset
 

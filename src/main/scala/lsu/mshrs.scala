@@ -265,6 +265,7 @@ class BoomMSHR(implicit edge: TLEdgeOut, p: Parameters) extends BoomModule()(p)
     io.resp.bits.uop  := rpq.io.deq.bits.uop
     io.resp.bits.data := loadgen.data
     io.resp.bits.is_hella := rpq.io.deq.bits.is_hella
+    io.resp.bits.is_hella_prft := rpq.io.deq.bits.is_hella_prft
     when (rpq.io.deq.fire) {
       commit_line   := true.B
     }
@@ -277,7 +278,7 @@ class BoomMSHR(implicit edge: TLEdgeOut, p: Parameters) extends BoomModule()(p)
     } .elsewhen (rpq.io.empty || (rpq.io.deq.valid && !drain_load)) {
       // io.commit_val is for the prefetcher. it tells the prefetcher that this line was correctly acquired
       // The prefetcher should consider fetching the next line
-      io.commit_val := true.B
+      io.commit_val := !req.uop.is_prefetch
       state := s_meta_read
     }
   } .elsewhen (state === s_meta_read) {
@@ -569,7 +570,8 @@ class BoomMSHRFile(implicit edge: TLEdgeOut, p: Parameters) extends BoomModule()
   val lb_read_arb  = Module(new Arbiter(new LineBufferReadReq, cfg.nMSHRs))
   val lb_write_arb = Module(new Arbiter(new LineBufferWriteReq, cfg.nMSHRs))
 
-  lb_read_arb.io.out.ready  := false.B
+  // Allow concurrent read and write to the linebuffer
+  lb_read_arb.io.out.ready  := true.B
   lb_write_arb.io.out.ready := true.B
 
   val lb_read_data = WireInit(0.U(encRowBits.W))
@@ -580,6 +582,10 @@ class BoomMSHRFile(implicit edge: TLEdgeOut, p: Parameters) extends BoomModule()
     when (lb_read_arb.io.out.fire) {
       lb_read_data := lb.read(lb_read_arb.io.out.bits.lb_addr)
     }
+  }
+
+  when (lb_read_arb.io.out.fire) {
+    lb_read_data := lb.read(lb_read_arb.io.out.bits.lb_addr)
   }
   def widthMap[T <: Data](f: Int => T) = VecInit((0 until memWidth).map(f))
 

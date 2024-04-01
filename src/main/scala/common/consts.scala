@@ -276,6 +276,17 @@ trait ScalarOpConstants
     uop.pdst       := 0.U
     uop.dst_rtype  := RT_X
 
+    uop.memory_latency.foreach(_ := 0.U)
+    uop.tea_psv.icache_miss := false.B
+    uop.tea_psv.itlb_smiss  := false.B
+    uop.tea_psv.itlb_pmiss  := false.B
+    uop.tea_psv.lsq_full    := false.B
+    uop.tea_psv.dcache_miss := false.B
+    uop.tea_psv.dtlb_smiss  := false.B
+    uop.tea_psv.dtlb_pmiss  := false.B
+    uop.tea_psv.branch_miss := false.B
+    uop.tea_psv.memory_order_xcpt := false.B
+
     val cs = Wire(new boom.common.CtrlSignals())
     cs             := DontCare // Overridden in the following lines
     cs.br_type     := BR_N
