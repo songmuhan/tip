@@ -1201,6 +1201,32 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   //-------------------------------------------------------------
   //-------------------------------------------------------------
 
+  if (DEBUG_PRINTF) {
+    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+    when(rob.io.commit.arch_valids.reduce(_||_)){
+      for (i <- 0 until coreWidth){
+        when(rob.io.commit.arch_valids(i)){
+          printf("TRACE::%d,%x,%x,%x,%d,%d,%d,%d,%x,%x,%x,%x,DASM(0x%x)\n", 
+                  debug_tsc_reg,
+                  rob.io.commit.uops(i).tea_psv.icache_miss.asUInt,
+                  rob.io.commit.uops(i).tea_psv.dcache_miss.asUInt,
+                  rob.io.commit.uops(i).tea_psv.branch_miss.asUInt,
+                  rob.io.commit.uops(i).fetch_buf_enq_cycle,
+                  rob.io.commit.uops(i).dis_cycle,
+                  rob.io.commit.uops(i).wb_cycle,
+                  rob.io.commit.uops(i).commit_cycle,
+                  rob.io.commit.uops(i).prs1,
+                  rob.io.commit.uops(i).prs2,
+                  rob.io.commit.uops(i).pdst,
+                  pcFromUOp(rob.io.commit.uops(i)),
+                  instrFromUOp(rob.io.commit.uops(i)),
+                  )                  
+        }
+      }
+    }
+  }
+
   // Writeback
   // ---------
   // First connect the ll_wport

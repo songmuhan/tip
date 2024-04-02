@@ -332,7 +332,7 @@ class Rob(
       rob_exception(rob_tail) := io.enq_uops(w).exception
       rob_predicated(rob_tail)   := false.B
       rob_fflags(w)(rob_tail)    := 0.U
-
+      rob_uop(rob_tail).dis_cycle := io.debug_tsc
       if (DEBUG_PRINTF) {
         def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
         def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
@@ -360,11 +360,13 @@ class Rob(
         rob_bsy(row_idx)      := false.B
         rob_unsafe(row_idx)   := false.B
         rob_predicated(row_idx)  := wb_resp.bits.predicated
+        rob_uop(row_idx).wb_cycle := io.debug_tsc
         if (DEBUG_PRINTF) {
           def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0),  uop.debug_inst)
           def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-          printf("%d |    [ROB] | write_back  | 0x%x DASM(0x%x)\n",
+          printf("%d |    [ROB] | write_back | BP:%x | 0x%x DASM(0x%x)\n",
             io.debug_tsc,
+            wb_resp.bits.predicated.asUInt,
             pcFromUOp(wb_uop),
             instrFromUOp(wb_uop),
           )
@@ -398,7 +400,7 @@ class Rob(
         rob_uop(cidx).tea_psv.dcache_miss := false.B
         rob_uop(cidx).tea_psv.dtlb_pmiss := clr_rob_psv.dtlb_pmiss
         rob_uop(cidx).tea_psv.dtlb_smiss := clr_rob_psv.dtlb_smiss
-
+        rob_uop(cidx).wb_cycle := io.debug_tsc
         if (DEBUG_PRINTF) {
           def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
           def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
@@ -456,7 +458,11 @@ class Rob(
     io.commit.uops(w)   := rob_uop(com_idx)
     io.commit.debug_insts(w) := rob_debug_inst_rdata(w)
     io.commit.instr_valids(w) := rob_val(com_idx)
-
+    /* record commit cycle */
+    when (io.commit.arch_valids(w)){
+      io.commit.uops(w).commit_cycle := io.debug_tsc
+    }   
+  
     // We unbusy branches in b1, but its easier to mark the taken/provider src in b2,
     // when the branch might be committing
     when (io.brupdate.b2.mispredict &&

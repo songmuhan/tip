@@ -169,7 +169,7 @@ class FetchBuffer(implicit p: Parameters) extends BoomModule
       edge_pc := io.enq.bits.pc
     }
   }
-
+  
   if (DEBUG_PRINTF) {
     def instrFromUOp(uop: MicroOp) = if (uop.is_rvc == true.B) uop.debug_inst(15, 0) else uop.debug_inst
     def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
@@ -181,6 +181,7 @@ class FetchBuffer(implicit p: Parameters) extends BoomModule
           val i = (b * bankWidth) + w
           when(io.enq.bits.mask(i)) {
             printf("%d | [FETCHB] | enqueue     | 0x%x DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(in_uops(i)), instrFromUOp(in_uops(i)));
+            in_uops(i).fetch_buf_enq_cycle := debug_tsc_reg
           }
         }
       }

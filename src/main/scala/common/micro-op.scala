@@ -42,6 +42,15 @@ class MicroOp(implicit p: Parameters) extends BoomBundle
   val fu_code          = UInt(FUConstants.FUC_SZ.W) // which functional unit do we use?
   val ctrl             = new CtrlSignals
 
+  val fetch_buf_enq_cycle  = UInt(32.W)
+  val dis_cycle = UInt(32.W)
+  val wb_cycle = UInt(32.W)
+  val commit_cycle = UInt(32.W)
+
+  val addr = UInt(64.W)
+
+
+
   // What is the next state of this uop in the issue window? useful
   // for the compacting queue.
   val iw_state         = UInt(2.W)
