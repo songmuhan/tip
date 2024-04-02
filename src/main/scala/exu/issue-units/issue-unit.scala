@@ -163,6 +163,34 @@ abstract class IssueUnit(
   }
 
   io.event_empty := !(issue_slots.map(s => s.valid).reduce(_|_))
+  if (DEBUG_PRINTF) {
+    val debug_tsc_reg = RegInit(0.U(xLen.W))
+    debug_tsc_reg := debug_tsc_reg + 1.U
+    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+    when(issue_slots.map(s => s.request).reduce(_|_)){
+        printf("%d | [issue-unit] | request ", debug_tsc_reg)
+        for (i <- 0 until numIssueSlots){
+          when(issue_slots(i).request){
+            printf("| %d:0x%x ",i.U, pcFromUOp(issue_slots(i).uop))
+          }
+        }
+        printf("\n")
+    } 
+
+    // when(issue_slots.map(s => s.valid).reduce(_|_)){
+    //     printf("%d | [issue-unit] | valid ", debug_tsc_reg)
+    //     for (i <- 0 until numIssueSlots){
+    //       when(issue_slots(i).valid){
+    //         printf("| %d:0x%x %d",i.U,pcFromUOp(issue_slots(i).uop), issue_slots(i).uop.issue_ready)
+    //       }
+    //     }
+    //     printf("\n")
+    // } 
+  }
+
+
+
 
   val count = PopCount(slots.map(_.io.valid))
   dontTouch(count)

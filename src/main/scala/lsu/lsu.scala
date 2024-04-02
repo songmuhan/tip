@@ -114,6 +114,7 @@ class LSUDMemIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
 class LSUClearPSV(implicit p: Parameters) extends BoomBundle()(p) {
   val dtlb_pmiss = Bool()
   val dtlb_smiss = Bool()
+  val addr = UInt(coreMaxAddrBits.W)
 }
 
 class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
@@ -967,6 +968,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val fired_hella_wakeup   = RegNext(will_fire_hella_wakeup)
 
   val mem_incoming_uop     = RegNext(widthMap(w => UpdateBrMask(io.core.brupdate, exe_req(w).bits.uop)))
+  val mem_incoming_addr    = RegNext(widthMap(w => exe_req(w).bits.addr))
   val mem_ldq_incoming_e   = RegNext(widthMap(w => UpdateBrMask(io.core.brupdate, ldq_incoming_e(w))))
   val mem_stq_incoming_e   = RegNext(widthMap(w => UpdateBrMask(io.core.brupdate, stq_incoming_e(w))))
   val mem_ldq_wakeup_e     = RegNext(UpdateBrMask(io.core.brupdate, ldq_wakeup_e))
@@ -993,6 +995,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val clr_bsy_brmask  = Reg(Vec(memWidth, UInt(maxBrCount.W)))
   val clr_bsy_dtlb_pmiss = RegInit(widthMap(w => false.B))
   val clr_bsy_dtlb_smiss = RegInit(widthMap(w => false.B))
+  val clr_bsy_addr = RegInit(widthMap(w => 0.U(coreMaxAddrBits.W)))
 
   for (w <- 0 until memWidth) {
     clr_bsy_valid   (w) := false.B
@@ -1001,7 +1004,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
     clr_bsy_dtlb_pmiss (w) := false.B
     clr_bsy_dtlb_smiss (w) := false.B
-
+    clr_bsy_addr(w) := 0.U
 
     when (fired_stad_incoming(w)) {
       clr_bsy_valid   (w) := mem_stq_incoming_e(w).valid           &&
@@ -1014,7 +1017,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       val stq_idx = mem_stq_incoming_e(w).bits.uop.stq_idx
       clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
       clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
-
+      clr_bsy_addr(w) := stq(stq_idx).bits.addr.bits
     } .elsewhen (fired_sta_incoming(w)) {
       clr_bsy_valid   (w) := mem_stq_incoming_e(w).valid            &&
                              mem_stq_incoming_e(w).bits.data.valid  &&
@@ -1026,6 +1029,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       val stq_idx = mem_stq_incoming_e(w).bits.uop.stq_idx
       clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
       clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
+      clr_bsy_addr(w) := stq(stq_idx).bits.addr.bits  
     } .elsewhen (fired_std_incoming(w)) {
       clr_bsy_valid   (w) := mem_stq_incoming_e(w).valid                 &&
                              mem_stq_incoming_e(w).bits.addr.valid       &&
@@ -1037,12 +1041,14 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       val stq_idx = mem_stq_incoming_e(w).bits.uop.stq_idx
       clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
       clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
+      clr_bsy_addr(w) := stq(stq_idx).bits.addr.bits
     } .elsewhen (fired_sfence(w)) {
       clr_bsy_valid   (w) := (w == 0).B // SFence proceeds down all paths, only allow one to clr the rob
       clr_bsy_rob_idx (w) := mem_incoming_uop(w).rob_idx
       clr_bsy_brmask  (w) := GetNewBrMask(io.core.brupdate, mem_incoming_uop(w))
       clr_bsy_dtlb_pmiss (w) := mem_incoming_uop(w).tea_psv.dtlb_pmiss
       clr_bsy_dtlb_smiss (w) := mem_incoming_uop(w).tea_psv.dtlb_smiss
+      clr_bsy_addr(w) := mem_incoming_addr(w)
     } .elsewhen (fired_sta_retry(w)) {
       clr_bsy_valid   (w) := mem_stq_retry_e.valid            &&
                              mem_stq_retry_e.bits.data.valid  &&
@@ -1054,6 +1060,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       val stq_idx = mem_stq_retry_e.bits.uop.stq_idx
       clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
       clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
+      clr_bsy_addr(w) := stq(stq_idx).bits.addr.bits
     }
 
     io.core.clr_bsy(w).valid := clr_bsy_valid(w) &&
@@ -1062,6 +1069,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     io.core.clr_bsy(w).bits  := clr_bsy_rob_idx(w)
     io.core.clr_bsy_psv(w).dtlb_pmiss  := clr_bsy_dtlb_pmiss(w)
     io.core.clr_bsy_psv(w).dtlb_smiss  := clr_bsy_dtlb_smiss(w)
+    io.core.clr_bsy_psv(w).addr := clr_bsy_addr(w)
   }
 
   val stdf_clr_bsy_valid   = RegInit(false.B)
@@ -1069,6 +1077,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val stdf_clr_bsy_brmask  = Reg(UInt(maxBrCount.W))
   val stdf_clr_bsy_dtlb_pmiss = RegInit(false.B)
   val stdf_clr_bsy_dtlb_smiss = RegInit(false.B)
+  val stdf_clr_bsy_addr = RegInit(0.U(coreMaxAddrBits.W))
   stdf_clr_bsy_valid   := false.B
   stdf_clr_bsy_rob_idx := 0.U
   stdf_clr_bsy_brmask  := 0.U
@@ -1085,6 +1094,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     stdf_clr_bsy_brmask  := GetNewBrMask(io.core.brupdate, mem_stdf_uop)
     stdf_clr_bsy_dtlb_pmiss := stq(s_idx).bits.uop.tea_psv.dtlb_pmiss
     stdf_clr_bsy_dtlb_smiss := stq(s_idx).bits.uop.tea_psv.dtlb_smiss
+    stdf_clr_bsy_addr := stq(s_idx).bits.addr.bits
   }
 
 
@@ -1097,6 +1107,8 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   io.core.clr_bsy_psv(memWidth).dtlb_pmiss := stdf_clr_bsy_dtlb_pmiss
   io.core.clr_bsy_psv(memWidth).dtlb_smiss := stdf_clr_bsy_dtlb_smiss
+  io.core.clr_bsy_psv(memWidth).addr := stdf_clr_bsy_addr
+  /* fixme: add forward address? */
 
   // Task 2: Do LD-LD. ST-LD searches for ordering failures
   //         Do LD-ST search for forwarding opportunities
@@ -1433,7 +1445,10 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         val send_fresp = ldq(ldq_idx).bits.uop.dst_rtype === RT_FLT
 
         io.core.exe(w).iresp.bits.uop  := ldq(ldq_idx).bits.uop
+        io.core.exe(w).iresp.bits.uop.addr := ldq(ldq_idx).bits.addr.bits
         io.core.exe(w).fresp.bits.uop  := ldq(ldq_idx).bits.uop
+        io.core.exe(w).fresp.bits.uop.addr := ldq(ldq_idx).bits.addr.bits
+
         io.core.exe(w).iresp.valid     := send_iresp
         io.core.exe(w).iresp.bits.data := io.dmem.resp(w).bits.data
         io.core.exe(w).fresp.valid     := send_fresp

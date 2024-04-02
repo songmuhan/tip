@@ -62,7 +62,9 @@ class IssueUnitCollapsing(
                                                         !dis_uops(i).exception &&
                                                         !dis_uops(i).is_fence &&
                                                         !dis_uops(i).is_fencei)
-
+  val debug_tsc_reg = RegInit(0.U(xLen.W))
+  debug_tsc_reg := debug_tsc_reg + 1.U
+  
   val uops = issue_slots.map(s=>s.out_uop) ++ dis_uops.map(s=>s)
   for (i <- 0 until numIssueSlots) {
     issue_slots(i).in_uop.valid := false.B
@@ -107,6 +109,8 @@ class IssueUnitCollapsing(
   for (w <- 0 until issueWidth) {
     port_issued(w) = false.B
   }
+  def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+  def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
 
   for (i <- 0 until numIssueSlots) {
     issue_slots(i).grant := false.B
@@ -115,10 +119,12 @@ class IssueUnitCollapsing(
     for (w <- 0 until issueWidth) {
       val can_allocate = (issue_slots(i).uop.fu_code & io.fu_types(w)) =/= 0.U
 
-      when (requests(i) && !uop_issued && can_allocate && !port_issued(w)) {
-        issue_slots(i).grant := true.B
-        io.iss_valids(w) := true.B
-        io.iss_uops(w) := issue_slots(i).uop
+      when (requests(i) && !uop_issued && !port_issued(w) && can_allocate) {
+          issue_slots(i).grant := true.B
+          io.iss_valids(w) := true.B
+          io.iss_uops(w) := issue_slots(i).uop
+          printf("%d | [issue-unit-age] | fire: %d | port: %d | %d:0x%x \n", debug_tsc_reg, io.iss_uops(w).issue_ready,w.U,i.U,pcFromUOp(io.iss_uops(w)))
+          // printf("%d | [issue-unit-age] | my uop   | port: %d | slot: %d|0x%x, DASM(0x%x) \n", debug_tsc_reg,w.U,i.U,pcFromUOp(my_uops(i)), instrFromUOp(my_uops(i)))
       }
       val was_port_issued_yet = port_issued(w)
       port_issued(w) = (requests(i) && !uop_issued && can_allocate) | port_issued(w)

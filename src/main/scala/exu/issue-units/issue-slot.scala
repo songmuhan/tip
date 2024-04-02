@@ -150,11 +150,23 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
       }
     }
   }
+  val debug_tsc_reg = RegInit(0.U(xLen.W))
+  debug_tsc_reg := debug_tsc_reg + 1.U
+
+  def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+  def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
 
   when (io.in_uop.valid) {
     slot_uop := io.in_uop.bits
+    printf("%d | [issue-slot] | in_uop | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, io.in_uop.bits.issue_ready, pcFromUOp(io.in_uop.bits), instrFromUOp(io.in_uop.bits))  
     assert (is_invalid || io.clear || io.kill, "trying to overwrite a valid issue slot.")
   }
+
+  // when(io.clear && io.grant ){
+  //   slot_uop.issue_ready := 0.U
+  //   printf("%d | [issue-slot] | slot_uop | clear | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, slot_uop.issue_ready, pcFromUOp(slot_uop), instrFromUOp(slot_uop))
+  // }
+
 
   // Wakeup Compare Logic
 
@@ -242,6 +254,27 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   val high_priority = slot_uop.is_br || slot_uop.is_jal || slot_uop.is_jalr
   io.request_hp := io.request && high_priority
 
+  // val issue_ready = RegInit(0.U(xLen.W))
+
+  // when(io.request){
+  //   printf("%d | [issue-slot] | slot_uop | requst | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, slot_uop.issue_ready, pcFromUOp(slot_uop), instrFromUOp(slot_uop))
+  // }
+  // // when(io.request && slot_uop.issue_ready === 0.U){
+  // //   slot_uop.issue_ready := debug_tsc_reg
+  // //   printf("%d | [issue-slot] | slot_uop | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, slot_uop.issue_ready, pcFromUOp(slot_uop), instrFromUOp(slot_uop))
+  // // }.else
+  // when(io.request && slot_uop.issue_ready =/=0.U){
+  //   printf("%d | [issue-slot] | slot_uop non-zero | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, slot_uop.issue_ready, pcFromUOp(slot_uop), instrFromUOp(slot_uop))
+  // }
+  // when(io.grant){
+  //   printf("%d | [issue-slot] | grant | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, slot_uop.issue_ready, pcFromUOp(slot_uop), instrFromUOp(slot_uop))
+  // }
+
+  // when(slot_uop.issue_ready =/= 0.U){
+  //   printf("%d | [issue-slot] | slot_uop | issue ready != 0| %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, slot_uop.issue_ready, pcFromUOp(slot_uop), instrFromUOp(slot_uop))
+  // }
+
+
   when (state === s_valid_1) {
     io.request := p1 && p2 && p3 && ppred && !io.kill
   } .elsewhen (state === s_valid_2) {
@@ -253,6 +286,12 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   //assign outputs
   io.valid := is_valid
   io.uop := slot_uop
+  when(io.request && slot_uop.issue_ready === 0.U){
+     io.uop.issue_ready := debug_tsc_reg
+    //  printf("%d | [issue-slot] | uop | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, io.uop.issue_ready, pcFromUOp(io.uop), instrFromUOp(io.uop))
+  }.elsewhen(io.request){
+    //  printf("%d | [issue-slot] | uop-nozero | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, io.uop.issue_ready, pcFromUOp(io.uop), instrFromUOp(io.uop))
+  }
   io.uop.iw_p1_poisoned := p1_poisoned
   io.uop.iw_p2_poisoned := p2_poisoned
 
@@ -262,6 +301,12 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   io.will_be_valid := is_valid && !(may_vacate && !squash_grant)
 
   io.out_uop            := slot_uop
+  when(io.request && slot_uop.issue_ready === 0.U){
+    io.out_uop.issue_ready := debug_tsc_reg
+    // printf("%d | [issue-slot] | out_uop | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, io.out_uop.issue_ready, pcFromUOp(io.out_uop), instrFromUOp(io.out_uop))
+  }.elsewhen(io.request){
+    // printf("%d | [issue-slot] | out_uop-nozero | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, io.out_uop.issue_ready, pcFromUOp(io.out_uop), instrFromUOp(io.out_uop))
+  }
   io.out_uop.iw_state   := next_state
   io.out_uop.uopc       := next_uopc
   io.out_uop.lrs1_rtype := next_lrs1_rtype

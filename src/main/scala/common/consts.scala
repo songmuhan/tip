@@ -276,6 +276,19 @@ trait ScalarOpConstants
     uop.pdst       := 0.U
     uop.dst_rtype  := RT_X
 
+
+    uop.icache_req_cyl := 0.U
+    uop.icache_resp_cyl := 0.U
+    uop.dec_ready := 0.U
+    uop.dec_fire := 0.U
+    uop.ren_ready := 0.U
+    uop.ren_fire := 0.U
+    uop.dis_ready := 0.U
+    uop.dis_fire := 0.U
+    uop.dis_stall_reason := 0.U
+    uop.issue_ready := 0.U
+    uop.issue_fire := 0.U
+
     uop.memory_latency.foreach(_ := 0.U)
     uop.tea_psv.icache_miss := false.B
     uop.tea_psv.itlb_smiss  := false.B
