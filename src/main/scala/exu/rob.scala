@@ -360,13 +360,15 @@ class Rob(
         rob_bsy(row_idx)      := false.B
         rob_unsafe(row_idx)   := false.B
         rob_predicated(row_idx)  := wb_resp.bits.predicated
-        rob_uop(row_idx).wb_cycle := io.debug_tsc
+        rob_uop(row_idx).finish_cycle := io.debug_tsc
+        rob_uop(row_idx).addr := wb_resp.bits.uop.addr
         if (DEBUG_PRINTF) {
           def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0),  uop.debug_inst)
           def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-          printf("%d |    [ROB] | write_back | BP:%x | 0x%x DASM(0x%x)\n",
+          printf("%d |    [ROB] | write_back | BP:%x | @ %x | 0x%x DASM(0x%x)\n",
             io.debug_tsc,
-            wb_resp.bits.predicated.asUInt,
+            wb_resp.bits.predicated,
+            wb_resp.bits.uop.addr,
             pcFromUOp(wb_uop),
             instrFromUOp(wb_uop),
           )
@@ -400,12 +402,14 @@ class Rob(
         rob_uop(cidx).tea_psv.dcache_miss := false.B
         rob_uop(cidx).tea_psv.dtlb_pmiss := clr_rob_psv.dtlb_pmiss
         rob_uop(cidx).tea_psv.dtlb_smiss := clr_rob_psv.dtlb_smiss
-        rob_uop(cidx).wb_cycle := io.debug_tsc
+        rob_uop(cidx).finish_cycle := io.debug_tsc
+        rob_uop(cidx).addr := clr_rob_psv.addr
         if (DEBUG_PRINTF) {
           def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
           def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-          printf("%d |    [ROB] | clr_bsy     | 0x%x DASM(0x%x)\n",
+          printf("%d |    [ROB] | clr_bsy | @%x 0x%x DASM(0x%x)\n",
             io.debug_tsc,
+            clr_rob_psv.addr,
             pcFromUOp(rob_uop(cidx)),
             instrFromUOp(rob_uop(cidx)),
           )
@@ -471,7 +475,9 @@ class Rob(
       io.commit.uops(w).debug_fsrc := BSRC_C
       io.commit.uops(w).taken      := io.brupdate.b2.taken
       io.commit.uops(w).tea_psv.branch_miss := true.B
-    }
+      /* for branch instruction, wb means the branch is detected to be wrong*/
+      io.commit.uops(w).finish_cycle := io.debug_tsc
+      }
 
 
     // Don't attempt to rollback the tail's row when the rob is full.

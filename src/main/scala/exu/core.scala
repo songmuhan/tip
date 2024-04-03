@@ -365,6 +365,18 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------
+
+
+  if (DEBUG_PRINTF) {
+    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+    when (b2.mispredict) {
+      printf("%d | [CORE]| branch | 0x%x DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(b2.uop), instrFromUOp(b2.uop))
+      b2.uop.finish_cycle := debug_tsc_reg
+    }
+  }
+
+
   // **** Fetch Stage/Frontend ****
   //-------------------------------------------------------------
   //-------------------------------------------------------------
@@ -1207,18 +1219,20 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     when(rob.io.commit.arch_valids.reduce(_||_)){
       for (i <- 0 until coreWidth){
         when(rob.io.commit.arch_valids(i)){
-          printf("TRACE::%d,%x,%x,%x,%d,%d,%d,%d,%x,%x,%x,%x,DASM(0x%x)\n", 
-                  debug_tsc_reg,
-                  rob.io.commit.uops(i).tea_psv.icache_miss.asUInt,
-                  rob.io.commit.uops(i).tea_psv.dcache_miss.asUInt,
-                  rob.io.commit.uops(i).tea_psv.branch_miss.asUInt,
+          printf("TRACE,%x,%x,%x,%d,%d,%d,%d,%x,%x,%x,%x,%x,%x,%x, \"DASM(0x%x)\"\n", 
+                  rob.io.commit.uops(i).tea_psv.icache_miss,
+                  rob.io.commit.uops(i).tea_psv.dcache_miss,
+                  rob.io.commit.uops(i).tea_psv.branch_miss,
                   rob.io.commit.uops(i).fetch_buf_enq_cycle,
                   rob.io.commit.uops(i).dis_cycle,
-                  rob.io.commit.uops(i).wb_cycle,
+                  rob.io.commit.uops(i).finish_cycle,
                   rob.io.commit.uops(i).commit_cycle,
                   rob.io.commit.uops(i).prs1,
                   rob.io.commit.uops(i).prs2,
                   rob.io.commit.uops(i).pdst,
+                  rob.io.commit.uops(i).flush_on_commit,
+                  rob.io.commit.uops(i).exception,
+                  rob.io.commit.uops(i).addr,
                   pcFromUOp(rob.io.commit.uops(i)),
                   instrFromUOp(rob.io.commit.uops(i)),
                   )                  

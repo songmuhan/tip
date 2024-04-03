@@ -44,10 +44,10 @@ class MicroOp(implicit p: Parameters) extends BoomBundle
 
   val fetch_buf_enq_cycle  = UInt(32.W)
   val dis_cycle = UInt(32.W)
-  val wb_cycle = UInt(32.W)
+  val finish_cycle = UInt(32.W)
   val commit_cycle = UInt(32.W)
 
-  val addr = UInt(64.W)
+  val addr = UInt(coreMaxAddrBits.W)
 
 
 
