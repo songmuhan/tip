@@ -522,6 +522,20 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dec_uops(w) := decode_units(w).io.deq.uop
   }
 
+  if (DEBUG_PRINTF){
+    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+    printf("%d | [CORE]", debug_tsc_reg)
+    
+    for (i <- 0 until coreWidth){
+      when(dec_valids(i)){
+        printf(" | i$ req:%d resp:%d | %x, \"DASM(0x%x)\"", dec_uops(i).icache_req_cyl, dec_uops(i).icache_resp_cyl, instrFromUOp(dec_uops(i)), pcFromUOp(dec_uops(i)))
+      }
+    }
+    printf("\n")
+  }
+
+
   //-------------------------------------------------------------
   // FTQ GetPC Port Arbitration
 

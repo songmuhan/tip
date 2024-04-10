@@ -119,7 +119,9 @@ class FetchBuffer(implicit p: Parameters) extends BoomModule
       in_uops(i).xcpt_ae_if     := io.enq.bits.xcpt_ae_if
       in_uops(i).bp_debug_if    := io.enq.bits.bp_debug_if_oh(i)
       in_uops(i).bp_xcpt_if     := io.enq.bits.bp_xcpt_if_oh(i)
-
+      
+      in_uops(i).icache_req_cyl := io.enq.bits.icache_req_cyl
+      in_uops(i).icache_resp_cyl:= io.enq.bits.icache_resp_cyl
       in_uops(i).debug_fsrc     := io.enq.bits.fsrc
       in_uops(i).tea_psv.itlb_pmiss     := false.B
       in_uops(i).tea_psv.itlb_smiss     := false.B
@@ -181,6 +183,7 @@ class FetchBuffer(implicit p: Parameters) extends BoomModule
           val i = (b * bankWidth) + w
           when(io.enq.bits.mask(i)) {
             printf("%d | [FETCHB] | enqueue     | 0x%x DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(in_uops(i)), instrFromUOp(in_uops(i)));
+            printf("%d | [FETCHB] | i$ req:%d resp:%d | 0x%x DASM(0x%x)\n", debug_tsc_reg,in_uops(i).icache_req_cyl, in_uops(i).icache_resp_cyl, pcFromUOp(in_uops(i)), instrFromUOp(in_uops(i)));
             in_uops(i).fetch_buf_enq_cycle := debug_tsc_reg
           }
         }

@@ -44,6 +44,10 @@ class FrontendResp(implicit p: Parameters) extends BoomBundle()(p) {
   val itlb_pmiss = Bool()
   val itlb_smiss = Bool()
   val memory_order_xcpt = Bool()
+  
+  /* DEG:: record icache req and resp time*/
+  val icache_req_cyl = UInt(64.W)
+  val icache_resp_cyl = UInt(64.W)
 }
 
 class GlobalHistory(implicit p: Parameters) extends BoomBundle()(p)
@@ -256,6 +260,10 @@ class FetchBundle(implicit p: Parameters) extends BoomBundle
   val itlb_pmiss = Bool()
   val itlb_smiss = Bool()
   val memory_order_xcpt = Bool()
+
+  /* DEG:: record icache req and resp time*/
+  val icache_req_cyl = UInt(64.W)
+  val icache_resp_cyl = UInt(64.W)
 }
 
 
@@ -350,7 +358,6 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   io.ptw <> tlb.io.ptw
   io.cpu.perf.tlbMiss := io.ptw.req.fire
   io.cpu.perf.acquire := icache.io.perf.acquire
-
   // --------------------------------------------------------
   // **** NextPC Select (F0) ****
   //      Send request to ICache
@@ -371,6 +378,8 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val s0_itlb_smiss        = WireInit(false.B)
   val s0_icache_miss       = WireInit(false.B)
   val s0_memory_order_xcpt = WireInit(false.B)
+  val s0_icache_req_cyl    = WireInit(0.U(64.W))
+  val s0_icache_resp_cyl   = WireInit(0.U(64.W))
 
 
 
@@ -383,10 +392,23 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_itlb_smiss        := false.B
     s0_icache_miss       := false.B
     s0_memory_order_xcpt := false.B
+    s0_icache_req_cyl    := 0.U
+    s0_icache_resp_cyl   := 0.U
   }
 
   icache.io.req.valid     := s0_valid
   icache.io.req.bits.addr := s0_vpc
+
+  /* fixme: record when to fetch the icache, and pass it down with uops */
+
+  if (DEBUG_PRINTF) {
+    val debug_tsc_reg = RegInit(0.U(xLen.W))
+    debug_tsc_reg := debug_tsc_reg + 1.U
+    when(s0_valid) {
+      printf("%d | [FRONTEND] | icache_req_fire | 0x%x\n", debug_tsc_reg, s0_vpc)
+      s0_icache_req_cyl := debug_tsc_reg
+    }
+  }
 
   bpd.io.f0_req.valid      := s0_valid
   bpd.io.f0_req.bits.pc    := s0_vpc
@@ -405,6 +427,8 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val s1_tsrc      = RegNext(s0_tsrc)
   val s1_icache_miss       = RegNext(s0_icache_miss)
   val s1_memory_order_xcpt = RegNext(s0_memory_order_xcpt)
+  val s1_icache_req_cyl = RegNext(s0_icache_req_cyl)
+  val s1_icache_resp_cyl = RegNext(s0_icache_resp_cyl)
   
   tlb.io.req.valid      := (s1_valid && !s1_is_replay && !f1_clear) || s1_is_sfence
   tlb.io.req.bits.cmd   := DontCare
@@ -482,6 +506,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val s2_itlb_smiss        = RegNext(s1_itlb_smiss)
   val s2_icache_miss       = RegNext(s1_icache_miss)
   val s2_memory_order_xcpt = RegNext(s1_memory_order_xcpt)
+  val s2_icache_req_cyl    = RegNext(s1_icache_req_cyl)
   
   val s2_is_replay = RegNext(s1_is_replay) && s2_valid
   val s2_xcpt = s2_valid && (s2_tlb_resp.ae.inst || s2_tlb_resp.pf.inst) && !s2_is_replay
@@ -524,6 +549,10 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
         printf("%d | [FRONTE] | itlb_miss   | 0x%x\n", debug_tsc_reg, s2_vpc);
       }
     }
+    /* fixme: which condition means we got the icache resp ? */
+    when(s2_valid && (icache.io.resp.valid && icache.io.resp.bits.hit) && !f2_clear){
+      printf("%d | [FRONTE] | icache req:%d resp:%d\n", debug_tsc_reg, s2_icache_req_cyl, icache.io.resp.bits.resp_cycle)
+    }
   }
 
 
@@ -539,6 +568,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     s0_itlb_smiss  := s2_itlb_smiss
     s0_icache_miss := (s2_icache_miss || (icache.io.resp.valid && !icache.io.resp.bits.hit))
     s0_memory_order_xcpt := s2_memory_order_xcpt
+    s0_icache_req_cyl := s2_icache_req_cyl
 
     // When this is not a replay (it queried the BPDs, we should use f3 resp in the replaying s1)
     s0_s1_use_f3_bpd_resp := !s2_is_replay
@@ -563,6 +593,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
       s0_itlb_smiss        := false.B
       s0_icache_miss       := false.B
       s0_memory_order_xcpt := false.B
+      s0_icache_req_cyl   := 0.U
     }
   }
   s0_replay_bpd_resp := f2_bpd_resp
@@ -601,12 +632,16 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   f3.io.enq.bits.itlb_smiss := (s2_itlb_smiss && !s2_itlb_pmiss)
   f3.io.enq.bits.icache_miss := s2_icache_miss
   f3.io.enq.bits.memory_order_xcpt := s2_memory_order_xcpt
+  /* fixme: which cycle is the icache resp cycle? */
+  f3.io.enq.bits.icache_req_cyl := s2_icache_req_cyl
+  f3.io.enq.bits.icache_resp_cyl := icache.io.resp.bits.resp_cycle 
 
   if (DEBUG_PRINTF) {
     val debug_tsc_reg = RegInit(0.U(xLen.W))
     debug_tsc_reg := debug_tsc_reg + 1.U
     when (f3.io.enq.fire) {
       printf("%d | [FRONTE] | fetched     | 0x%x\n", debug_tsc_reg, f3.io.enq.bits.pc);
+      printf("%d | [FRONTE] | icache %d %d | 0x%x\n", debug_tsc_reg, f3.io.enq.bits.icache_req_cyl, f3.io.enq.bits.icache_resp_cyl,f3.io.enq.bits.pc);
     }
   }
 
@@ -661,6 +696,8 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   f3_fetch_bundle.itlb_smiss := f3_imemresp.itlb_smiss
   f3_fetch_bundle.icache_miss := f3_imemresp.icache_miss
   f3_fetch_bundle.memory_order_xcpt := f3_imemresp.memory_order_xcpt
+  f3_fetch_bundle.icache_req_cyl := f3_imemresp.icache_req_cyl
+  f3_fetch_bundle.icache_resp_cyl := f3_imemresp.icache_resp_cyl
 
   // Tracks trailing 16b of previous fetch packet
   val f3_prev_half    = Reg(UInt(16.W))
