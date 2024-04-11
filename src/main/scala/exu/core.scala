@@ -658,6 +658,24 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   /* DEG:: rename only stall when no free register can be allocated */
   ren_stalls := rename_stage.io.ren_stalls
 
+  val ren_stalls_cycle    =  RegInit(VecInit(Seq.fill(coreWidth)(0.U(64.W))))
+
+  for (w <- 0 until coreWidth){
+    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+    when(dis_valids(w)){
+      when(ren_stalls(w)){
+        ren_stalls_cycle(w) :=  ren_stalls_cycle(w) + 1.U
+      }.otherwise{
+        dis_uops(w).ren_cycle := debug_tsc_reg    
+        dis_uops(w).ren_stall_cycle := ren_stalls_cycle(w)
+        ren_stalls_cycle(w) := 0.U
+      printf("%d | [CORE] | ren | %d, %d| 0x%x, DASM(0x%x)\n", debug_tsc_reg, dis_uops(w).ren_cycle, dis_uops(w).ren_stall_cycle,pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
+      }
+    }
+  }
+  
+
 
   /**
    * TODO This is a bit nasty, but it's currently necessary to

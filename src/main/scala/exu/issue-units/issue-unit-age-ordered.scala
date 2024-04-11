@@ -125,6 +125,7 @@ class IssueUnitCollapsing(
           def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
           def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
           printf("%d | [ISSUE-AGE] | port %d type: %d | 0x%x DASM(0x%x)\n", debug_tsc_reg, w.U, issue_slots(i).uop.fu_code, pcFromUOp(issue_slots(i).uop), instrFromUOp(issue_slots(i).uop))
+          issue_slots(i).uop.iss_ready_cycle := debug_tsc_reg
         }
 
       }

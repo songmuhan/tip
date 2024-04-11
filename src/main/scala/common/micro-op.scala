@@ -43,12 +43,24 @@ class MicroOp(implicit p: Parameters) extends BoomBundle
   val ctrl             = new CtrlSignals
 
   val fetch_buf_enq_cycle  = UInt(32.W)
-  val dis_cycle = UInt(32.W)
-  val finish_cycle = UInt(32.W)
-  val commit_cycle = UInt(32.W)
 
-  val icache_req_cyl = UInt(64.W)
-  val icache_resp_cyl = UInt(64.W)
+
+  val icache_req_cyl = UInt(64.W) /* time to fire fetching I-cache */
+  val icache_resp_cyl = UInt(64.W) /* time to get cache response */
+
+  val ren_cycle = UInt(64.W)
+  val ren_stall_cycle = UInt(64.W)
+
+  val dis_ready_cycle = UInt(64.W)
+  val dis_cycle = UInt(64.W) /* actual time to dispatch */
+
+  val iss_ready_cycle = UInt(64.W) /* time to issue, maybe stalled by insufficient issue port (function unit) */
+  val iss_cycle = UInt(64.W) /* actual issue time */
+
+
+
+  val finish_cycle = UInt(64.W)
+  val commit_cycle = UInt(64.W)
 
   val addr = UInt(coreMaxAddrBits.W)
 
