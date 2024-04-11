@@ -105,6 +105,8 @@ class RobIo(
   // Stall Decode as appropriate
   val empty = Output(Bool())
   val ready = Output(Bool()) // ROB is busy unrolling rename state...
+  /* DEG:: rob is full */
+  val full = Output(Bool()) 
 
   // Stall the frontend if we know we will redirect the PC
   val flush_frontend = Output(Bool())
@@ -336,8 +338,9 @@ class Rob(
       if (DEBUG_PRINTF) {
         def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
         def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-        printf("%d |    [ROB] | dispatch    | 0x%x DASM(0x%x)\n",
+        printf("%d |    [ROB] | dispatch | tail %d |0x%x DASM(0x%x)\n",
           io.debug_tsc,
+          rob_tail,
           pcFromUOp(io.enq_uops(w)),
           instrFromUOp(io.enq_uops(w))
         )
@@ -853,6 +856,7 @@ class Rob(
   io.rob_pnr_idx  := rob_pnr_idx
   io.empty        := empty
   io.ready        := (rob_state === s_normal) && !full && !r_xcpt_val
+  io.full         := full  
 
   //-----------------------------------------------
   //-----------------------------------------------

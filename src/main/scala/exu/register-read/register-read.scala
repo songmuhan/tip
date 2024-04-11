@@ -206,11 +206,29 @@ class RegisterRead(
 
   //-------------------------------------------------------------
   // set outputs to execute pipelines
+  val debug_tsc_reg = RegInit(0.U(xLen.W))
+  debug_tsc_reg := debug_tsc_reg + 1.U
   for (w <- 0 until issueWidth) {
     val numReadPorts = numReadPortsArray(w)
 
     io.exe_reqs(w).valid    := exe_reg_valids(w)
     io.exe_reqs(w).bits.uop := exe_reg_uops(w)
+
+    if (DEBUG_PRINTF) {
+      def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+      def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+      
+      when(exe_reg_valids(w)){
+        printf("%d | [REGISTER] |0x%x DASM(0x%x)\n",
+          debug_tsc_reg,
+          pcFromUOp(exe_reg_uops(w)),
+          instrFromUOp(exe_reg_uops(w))
+        )
+      }
+    }
+
+
+
     if (numReadPorts > 0) io.exe_reqs(w).bits.rs1_data := exe_reg_rs1_data(w)
     if (numReadPorts > 1) io.exe_reqs(w).bits.rs2_data := exe_reg_rs2_data(w)
     if (numReadPorts > 2) io.exe_reqs(w).bits.rs3_data := exe_reg_rs3_data(w)

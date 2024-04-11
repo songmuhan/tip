@@ -655,6 +655,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   // Outputs
   dis_uops := rename_stage.io.ren2_uops
   dis_valids := rename_stage.io.ren2_mask
+  /* DEG:: rename only stall when no free register can be allocated */
   ren_stalls := rename_stage.io.ren_stalls
 
 
@@ -689,6 +690,19 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dis_uops(w).ppred_busy := p_uop.ppred_busy && dis_uops(w).is_sfb_shadow
 
     ren_stalls(w) := rename_stage.io.ren_stalls(w) || f_stall || p_stall
+  }
+  
+  /* DEG:: rename stall is caused by insufficient (Float / Int) physical registers*/
+  if(DEBUG_PRINTF){
+    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+    when(ren_stalls.reduce(_||_)){
+      for (w <- 0 until coreWidth){
+        when(ren_stalls(w)){
+          printf("%d | [CORE] | ren_stall | 0x%x, DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(rename_stage.io.ren2_uops(w)), instrFromUOp(rename_stage.io.ren2_uops(w)))
+        }
+      }
+    }
   }
 
   //-------------------------------------------------------------
@@ -743,8 +757,27 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dis_uops(w).ldq_idx := io.lsu.dis_ldq_idx(w)
     dis_uops(w).stq_idx := io.lsu.dis_stq_idx(w)
     dis_uops(w).tea_psv.lsq_full := RegNext(lsq_full)
+
+    if(DEBUG_PRINTF){
+    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+      when(lsq_full){
+        printf("%d | [CORE] | lsq_full | 0x%x, DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
+      }
+    }
   }
 
+  if (DEBUG_PRINTF){
+    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+    when(dis_stalls.reduce(_||_)){
+      for (w <- 0 until coreWidth){
+        when(dis_stalls(w) && rob.io.full){
+          printf("%d | [CORE] | rob_full | 0x%x, DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
+        }
+      }
+    }
+  }
   //-------------------------------------------------------------
   // Rob Allocation Logic
 
@@ -952,11 +985,25 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
         iss_uops(iss_idx)   := mem_iss_unit.io.iss_uops(mem_iss_cnt)
         mem_iss_unit.io.fu_types(mem_iss_cnt) := Mux(pause_mem, 0.U, fu_types)
         mem_iss_cnt += 1
+        if (DEBUG_PRINTF){
+          def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+          def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+          when(iss_valids(iss_idx)){
+            printf("%d | [CORE] | mem_issue | 0x%x, DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(iss_uops(iss_idx)), instrFromUOp(iss_uops(iss_idx)))
+          }
+        }
       } else {
         iss_valids(iss_idx) := int_iss_unit.io.iss_valids(int_iss_cnt)
         iss_uops(iss_idx)   := int_iss_unit.io.iss_uops(int_iss_cnt)
         int_iss_unit.io.fu_types(int_iss_cnt) := fu_types
         int_iss_cnt += 1
+        if (DEBUG_PRINTF){
+          def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+          def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+          when(iss_valids(iss_idx)){
+            printf("%d | [CORE] | int_issue | 0x%x, DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(iss_uops(iss_idx)), instrFromUOp(iss_uops(iss_idx)))
+          }
+        }
       }
       iss_idx += 1
     }
