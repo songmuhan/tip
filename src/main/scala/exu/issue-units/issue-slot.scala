@@ -48,6 +48,7 @@ class IssueSlotIO(val numWakeupPorts: Int)(implicit p: Parameters) extends BoomB
   val in_uop        = Flipped(Valid(new MicroOp())) // if valid, this WILL overwrite an entry!
   val out_uop   = Output(new MicroOp()) // the updated slot uop; will be shifted upwards in a collasping queue.
   val uop           = Output(new MicroOp()) // the current Slot's uop. Sent down the pipeline when issued.
+  val request_cycle = Output(UInt(64.W))
 
   val debug = {
     val result = new Bundle {
@@ -241,6 +242,40 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   io.request := is_valid && p1 && p2 && p3 && ppred && !io.kill
   val high_priority = slot_uop.is_br || slot_uop.is_jal || slot_uop.is_jalr
   io.request_hp := io.request && high_priority
+
+  // val issue_ready = RegInit(0.U(xLen.W))
+  val debug_tsc_reg = RegInit(0.U(xLen.W))
+  debug_tsc_reg := debug_tsc_reg + 1.U
+  when(io.request && io.request_cycle === 0.U){
+    io.request_cycle := debug_tsc_reg
+  }
+
+  def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+  def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+
+  when(io.request){
+    printf("%d | [issue-slot] | fire | %d %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, io.request_cycle, io.uop.issue_ready , pcFromUOp(io.uop), instrFromUOp(io.uop))
+  }
+
+  // when(io.request){
+  //   when(io.grant){
+  //     when(issue_ready === 0.U){
+  //       slot_uop.issue_ready := debug_tsc_reg
+  //       io.out_uop.issue_ready := debug_tsc_reg
+  //     }.otherwise {
+  //       slot_uop.issue_ready := issue_ready
+  //       io.out_uop.issue_ready := issue_ready
+  //     }
+  //     issue_ready := 0.U
+  //     printf("%d | [issue-slot] | fire | %d %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, issue_ready, io.out_uop.issue_ready , pcFromUOp(io.out_uop), instrFromUOp(io.out_uop))
+  //     printf("%d | [issue-slot] | fire | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, issue_ready, pcFromUOp(slot_uop), instrFromUOp(slot_uop))
+
+  //   }.elsewhen(issue_ready === 0.U){
+  //     issue_ready := debug_tsc_reg
+  //     printf("%d | [issue-slot] | ready | out | 0x%x DASM(0x%x) \n", debug_tsc_reg, pcFromUOp(io.out_uop), instrFromUOp(io.out_uop))
+  //     printf("%d | [issue-slot] | ready | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, issue_ready, pcFromUOp(slot_uop), instrFromUOp(slot_uop))
+  //   }
+  // }
 
   when (state === s_valid_1) {
     io.request := p1 && p2 && p3 && ppred && !io.kill

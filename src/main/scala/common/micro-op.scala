@@ -48,14 +48,18 @@ class MicroOp(implicit p: Parameters) extends BoomBundle
   val icache_req_cyl = UInt(64.W) /* time to fire fetching I-cache */
   val icache_resp_cyl = UInt(64.W) /* time to get cache response */
 
-  val ren_cycle = UInt(64.W)
-  val ren_stall_cycle = UInt(64.W)
+  val dec_ready = UInt(64.W)
+  val dec_fire = UInt(64.W)
 
-  val dis_ready_cycle = UInt(64.W)
-  val dis_cycle = UInt(64.W) /* actual time to dispatch */
+  val ren_ready = UInt(64.W)
+  val ren_fire = UInt(64.W)
 
-  val iss_ready_cycle = UInt(64.W) /* time to issue, maybe stalled by insufficient issue port (function unit) */
-  val iss_cycle = UInt(64.W) /* actual issue time */
+  val dis_ready = UInt(64.W)
+  val dis_fire = UInt(64.W) /* actual time to dispatch */
+  val dis_stall_reason = UInt(3.W)
+
+  val issue_ready = UInt(64.W) /* time to issue, maybe stalled by insufficient issue port (function unit) */
+  val issue_fire = UInt(64.W) /* actual issue time */
 
 
 

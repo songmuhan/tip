@@ -107,6 +107,9 @@ class IssueUnitCollapsing(
   for (w <- 0 until issueWidth) {
     port_issued(w) = false.B
   }
+  def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+  def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+  val _cycle = RegInit(VecInit(Seq.fill(numIssueSlots)(0.U(64.W))))
   val debug_tsc_reg = RegInit(0.U(xLen.W))
   debug_tsc_reg := debug_tsc_reg + 1.U
   for (i <- 0 until numIssueSlots) {
@@ -115,20 +118,27 @@ class IssueUnitCollapsing(
 
     for (w <- 0 until issueWidth) {
       val can_allocate = (issue_slots(i).uop.fu_code & io.fu_types(w)) =/= 0.U
-
-      when (requests(i) && !uop_issued && can_allocate) {
-        when(!port_issued(w)){
-        issue_slots(i).grant := true.B
-        io.iss_valids(w) := true.B
-        io.iss_uops(w) := issue_slots(i).uop
+      when (requests(i) && !uop_issued) {
+        when(!port_issued(w) && can_allocate){
+          issue_slots(i).grant := true.B
+          io.iss_valids(w) := true.B
+          io.iss_uops(w) := issue_slots(i).uop
+          io.iss_uops(w).issue_ready := issue_slots(i).uop.issue_ready
+         
+          // io.iss_uops(w).issue_ready := _cycle(i)
+          printf("%d | [ISSUE-UNIT] | cycle: %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, io.iss_uops(w).issue_ready, pcFromUOp(issue_slots(i).uop), instrFromUOp(issue_slots(i).uop))
+          _cycle(i) := 0.U
         }.otherwise{
-          def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-          def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
-          printf("%d | [ISSUE-AGE] | port %d type: %d | 0x%x DASM(0x%x)\n", debug_tsc_reg, w.U, issue_slots(i).uop.fu_code, pcFromUOp(issue_slots(i).uop), instrFromUOp(issue_slots(i).uop))
-          issue_slots(i).uop.iss_ready_cycle := debug_tsc_reg
+          _cycle(i) := debug_tsc_reg
+          printf("%d | [ISSUE-UNIT] | pend: %d | %d | 0x%x DASM(0x%x) \n", debug_tsc_reg, _cycle(i), i.U, pcFromUOp(issue_slots(i).uop), instrFromUOp(issue_slots(i).uop))
         }
-
       }
+
+      // when (requests(i) && !uop_issued && can_allocate && !port_issued(w)) {
+      //     issue_slots(i).grant := true.B
+      //     io.iss_valids(w) := true.B
+      //     io.iss_uops(w) := issue_slots(i).uop
+      // }
       val was_port_issued_yet = port_issued(w)
       port_issued(w) = (requests(i) && !uop_issued && can_allocate) | port_issued(w)
       uop_issued = (requests(i) && can_allocate && !was_port_issued_yet) | uop_issued

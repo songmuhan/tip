@@ -168,16 +168,19 @@ abstract class IssueUnit(
     debug_tsc_reg := debug_tsc_reg + 1.U
     def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
     def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-    when(issue_slots.map(s => s.valid).reduce(_|_)){
-        printf("%d | [ISSUE-UNIT] ", debug_tsc_reg)
+    val _cycle = RegInit(VecInit(Seq.fill(numIssueSlots)(0.U(xLen.W))))
+    when(issue_slots.map(s => s.request).reduce(_|_)){
+        printf("%d | [ISSUE-UNIT] | ready ", debug_tsc_reg)
         for (i <- 0 until numIssueSlots){
-          when(issue_slots(i).valid){
+          when(issue_slots(i).request){
             printf("| 0x%x DASM(0x%x) ", pcFromUOp(issue_slots(i).uop), instrFromUOp(issue_slots(i).uop))
           }
         }
         printf("\n")
-    }
+    } 
   }
+
+
 
 
   val count = PopCount(slots.map(_.io.valid))

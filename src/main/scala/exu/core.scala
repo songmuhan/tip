@@ -658,22 +658,22 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   /* DEG:: rename only stall when no free register can be allocated */
   ren_stalls := rename_stage.io.ren_stalls
 
-  val ren_stalls_cycle    =  RegInit(VecInit(Seq.fill(coreWidth)(0.U(64.W))))
+  // val ren_stalls_cycle    =  RegInit(VecInit(Seq.fill(coreWidth)(0.U(64.W))))
 
-  for (w <- 0 until coreWidth){
-    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
-    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-    when(dis_valids(w)){
-      when(ren_stalls(w)){
-        ren_stalls_cycle(w) :=  ren_stalls_cycle(w) + 1.U
-      }.otherwise{
-        dis_uops(w).ren_cycle := debug_tsc_reg    
-        dis_uops(w).ren_stall_cycle := ren_stalls_cycle(w)
-        ren_stalls_cycle(w) := 0.U
-      printf("%d | [CORE] | ren | %d, %d| 0x%x, DASM(0x%x)\n", debug_tsc_reg, dis_uops(w).ren_cycle, dis_uops(w).ren_stall_cycle,pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
-      }
-    }
-  }
+  // for (w <- 0 until coreWidth){
+  //   def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+  //   def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+  //   when(dis_valids(w)){
+  //     when(ren_stalls(w)){
+  //       ren_stalls_cycle(w) :=  ren_stalls_cycle(w) + 1.U
+  //     }.otherwise{
+  //       dis_uops(w).ren_cycle := debug_tsc_reg    
+  //       dis_uops(w).ren_stall_cycle := ren_stalls_cycle(w)
+  //       ren_stalls_cycle(w) := 0.U
+  //     printf("%d | [CORE] | ren | %d, %d| 0x%x, DASM(0x%x)\n", debug_tsc_reg, dis_uops(w).ren_cycle, dis_uops(w).ren_stall_cycle,pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
+  //     }
+  //   }
+  // }
   
 
 
@@ -768,6 +768,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   //-------------------------------------------------------------
   // LDQ/STQ Allocation Logic
+  // val dispatch_stall_lsq_full_cycles    =  RegInit(VecInit(Seq.fill(coreWidth)(0.U(64.W))))
+  // val dispatch_stall_rob_full_cycles    =  RegInit(VecInit(Seq.fill(coreWidth)(0.U(64.W))))
+
 
   for (w <- 0 until coreWidth) {
     val lsq_full = dis_valids(w) && !dis_uops(w).exception && ((dis_uops(w).uses_ldq && io.lsu.ldq_full(w)) || (dis_uops(w).uses_stq && io.lsu.stq_full(w)))
@@ -775,27 +778,34 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dis_uops(w).ldq_idx := io.lsu.dis_ldq_idx(w)
     dis_uops(w).stq_idx := io.lsu.dis_stq_idx(w)
     dis_uops(w).tea_psv.lsq_full := RegNext(lsq_full)
-
-    if(DEBUG_PRINTF){
-    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
-    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-      when(lsq_full){
-        printf("%d | [CORE] | lsq_full | 0x%x, DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
-      }
-    }
   }
 
-  if (DEBUG_PRINTF){
-    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
-    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-    when(dis_stalls.reduce(_||_)){
-      for (w <- 0 until coreWidth){
-        when(dis_stalls(w) && rob.io.full){
-          printf("%d | [CORE] | rob_full | 0x%x, DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
-        }
-      }
-    }
-  }
+
+
+  // if (DEBUG_PRINTF){
+  //   def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+  //   def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+  //   when(dis_stalls.reduce(_||_)){
+  //     for (w <- 0 until coreWidth){
+  //       when(dis_stalls(w) && rob.io.full){
+  //         dispatch_stall_rob_full_cycles(w) := dispatch_stall_rob_full_cycles(w) + 1.U
+  //         printf("%d | [CORE] | rob_full | %d | 0x%x, DASM(0x%x)\n", debug_tsc_reg, RegNext(dispatch_stall_rob_full_cycles(w)),pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
+  //       }
+  //       val lsq_full = dis_valids(w) && !dis_uops(w).exception && ((dis_uops(w).uses_ldq && io.lsu.ldq_full(w)) || (dis_uops(w).uses_stq && io.lsu.stq_full(w)))
+  //       when(dis_stalls(w) && lsq_full){
+  //         dispatch_stall_lsq_full_cycles(w) := dispatch_stall_lsq_full_cycles(w) + 1.U
+  //         printf("%d | [CORE] | lsq_full | %d |0x%x, DASM(0x%x)\n", debug_tsc_reg, RegNext(dispatch_stall_lsq_full_cycles(w)), pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
+  //       }
+  //     }
+  //   }
+  //   for (w <- 0 until coreWidth){
+  //     when(dis_fire(w)){
+  //       dispatch_stall_rob_full_cycles(w) := 0.U
+  //       dispatch_stall_lsq_full_cycles(w) := 0.U
+  //     }
+  //   }
+  // }
+
   //-------------------------------------------------------------
   // Rob Allocation Logic
 
@@ -1006,8 +1016,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
         if (DEBUG_PRINTF){
           def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
           def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-          when(iss_valids(iss_idx)){
-            printf("%d | [CORE] | mem_issue | 0x%x, DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(iss_uops(iss_idx)), instrFromUOp(iss_uops(iss_idx)))
+          when(iss_valids(iss_idx) && !pause_mem){
+            iss_uops(iss_idx).issue_fire := debug_tsc_reg
+            printf("%d | [CORE] | mem_issue | %d -> %d | 0x%x, DASM(0x%x)\n", debug_tsc_reg, iss_uops(iss_idx).issue_ready,iss_uops(iss_idx).issue_fire,pcFromUOp(iss_uops(iss_idx)), instrFromUOp(iss_uops(iss_idx)))
           }
         }
       } else {
@@ -1019,7 +1030,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
           def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
           def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
           when(iss_valids(iss_idx)){
-            printf("%d | [CORE] | int_issue | 0x%x, DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(iss_uops(iss_idx)), instrFromUOp(iss_uops(iss_idx)))
+            iss_uops(iss_idx).issue_fire := debug_tsc_reg
+            printf("%d | [CORE] | int_issue | %d -> %d | 0x%x, DASM(0x%x)\n", debug_tsc_reg, iss_uops(iss_idx).issue_ready,iss_uops(iss_idx).issue_fire , pcFromUOp(iss_uops(iss_idx)), instrFromUOp(iss_uops(iss_idx)))
           }
         }
       }
@@ -1292,33 +1304,33 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   //-------------------------------------------------------------
   //-------------------------------------------------------------
 
-  if (DEBUG_PRINTF) {
-    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
-    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-    when(rob.io.commit.arch_valids.reduce(_||_)){
-      for (i <- 0 until coreWidth){
-        when(rob.io.commit.arch_valids(i)){
-          printf("TRACE,%x,%x,%x,%d,%d,%d,%d,%x,%x,%x,%x,%x,%x,%x, \"DASM(0x%x)\"\n", 
-                  rob.io.commit.uops(i).tea_psv.icache_miss,
-                  rob.io.commit.uops(i).tea_psv.dcache_miss,
-                  rob.io.commit.uops(i).tea_psv.branch_miss,
-                  rob.io.commit.uops(i).fetch_buf_enq_cycle,
-                  rob.io.commit.uops(i).dis_cycle,
-                  rob.io.commit.uops(i).finish_cycle,
-                  rob.io.commit.uops(i).commit_cycle,
-                  rob.io.commit.uops(i).prs1,
-                  rob.io.commit.uops(i).prs2,
-                  rob.io.commit.uops(i).pdst,
-                  rob.io.commit.uops(i).flush_on_commit,
-                  rob.io.commit.uops(i).exception,
-                  rob.io.commit.uops(i).addr,
-                  pcFromUOp(rob.io.commit.uops(i)),
-                  instrFromUOp(rob.io.commit.uops(i)),
-                  )                  
-        }
-      }
-    }
-  }
+  // if (DEBUG_PRINTF) {
+  //   def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+  //   def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+  //   when(rob.io.commit.arch_valids.reduce(_||_)){
+  //     for (i <- 0 until coreWidth){
+  //       when(rob.io.commit.arch_valids(i)){
+  //         printf("TRACE,%x,%x,%x,%d,%d,%d,%d,%x,%x,%x,%x,%x,%x,%x, \"DASM(0x%x)\"\n", 
+  //                 rob.io.commit.uops(i).tea_psv.icache_miss,
+  //                 rob.io.commit.uops(i).tea_psv.dcache_miss,
+  //                 rob.io.commit.uops(i).tea_psv.branch_miss,
+  //                 rob.io.commit.uops(i).fetch_buf_enq_cycle,
+  //                 rob.io.commit.uops(i).dis_cycle,
+  //                 rob.io.commit.uops(i).finish_cycle,
+  //                 rob.io.commit.uops(i).commit_cycle,
+  //                 rob.io.commit.uops(i).prs1,
+  //                 rob.io.commit.uops(i).prs2,
+  //                 rob.io.commit.uops(i).pdst,
+  //                 rob.io.commit.uops(i).flush_on_commit,
+  //                 rob.io.commit.uops(i).exception,
+  //                 rob.io.commit.uops(i).addr,
+  //                 pcFromUOp(rob.io.commit.uops(i)),
+  //                 instrFromUOp(rob.io.commit.uops(i)),
+  //                 )                  
+  //       }
+  //     }
+  //   }
+  // }
 
   // Writeback
   // ---------

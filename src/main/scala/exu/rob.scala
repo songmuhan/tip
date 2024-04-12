@@ -334,7 +334,7 @@ class Rob(
       rob_exception(rob_tail) := io.enq_uops(w).exception
       rob_predicated(rob_tail)   := false.B
       rob_fflags(w)(rob_tail)    := 0.U
-      rob_uop(rob_tail).dis_cycle := io.debug_tsc
+      // rob_uop(rob_tail).dis_cycle := io.debug_tsc
       if (DEBUG_PRINTF) {
         def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
         def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
