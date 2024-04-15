@@ -133,14 +133,14 @@ class ICacheModule(outer: ICache) extends LazyModuleImp(outer)
   val s0_vaddr = io.req.bits.addr
 
 
-  /* DEG:: record when we fire a cache access, and when to get the response */
-  if (DEBUG_PRINTF) {
-    val debug_tsc_reg = RegInit(0.U(xLen.W))
-    debug_tsc_reg := debug_tsc_reg + 1.U
-    when(s0_valid) {
-        printf("%d | [ICACHE] | req 0x%x\n", debug_tsc_reg, s0_vaddr)
-      }
-  }
+  // /* DEG:: record when we fire a cache access, and when to get the response */
+  // if (DEBUG_PRINTF) {
+  //   val debug_tsc_reg = RegInit(0.U(xLen.W))
+  //   debug_tsc_reg := debug_tsc_reg + 1.U
+  //   when(s0_valid) {
+  //       printf("%d | [ICACHE] | req 0x%x\n", debug_tsc_reg, s0_vaddr)
+  //     }
+  // }
 
   val s1_valid = RegNext(s0_valid)
   val s1_tag_hit = Wire(Vec(nWays, Bool()))
@@ -345,11 +345,11 @@ class ICacheModule(outer: ICache) extends LazyModuleImp(outer)
     val s2_vaddr = RegNext(s1_vaddr)
     val debug_tsc_reg = RegInit(0.U(xLen.W))
     debug_tsc_reg := debug_tsc_reg + 1.U
-    when(s2_valid && s2_miss) {
-      printf("%d | [ICACHE] | icache_miss | 0x%x\n", debug_tsc_reg, s2_vaddr)
-    }
+    // when(s2_valid && s2_miss) {
+    //   printf("%d | [ICACHE] | icache_miss | 0x%x\n", debug_tsc_reg, s2_vaddr)
+    // }
     when(s2_valid && s2_hit){
-      printf("%d | [ICACHE] | resp:%d | 0x%x\n", debug_tsc_reg,debug_tsc_reg ,s2_vaddr)
+      // printf("%d | [ICACHE] | resp:%d | 0x%x\n", debug_tsc_reg,debug_tsc_reg ,s2_vaddr)
       io.resp.bits.resp_cycle := debug_tsc_reg
     }
   }

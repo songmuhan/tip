@@ -401,14 +401,14 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
 
   /* fixme: record when to fetch the icache, and pass it down with uops */
 
-  if (DEBUG_PRINTF) {
-    val debug_tsc_reg = RegInit(0.U(xLen.W))
-    debug_tsc_reg := debug_tsc_reg + 1.U
-    when(s0_valid) {
-      printf("%d | [FRONTEND] | icache_req_fire | 0x%x\n", debug_tsc_reg, s0_vpc)
-      s0_icache_req_cyl := debug_tsc_reg
-    }
-  }
+  // if (DEBUG_PRINTF) {
+  //   val debug_tsc_reg = RegInit(0.U(xLen.W))
+  //   debug_tsc_reg := debug_tsc_reg + 1.U
+  //   when(s0_valid) {
+  //     printf("%d | [FRONTEND] | icache_req_fire | 0x%x\n", debug_tsc_reg, s0_vpc)
+  //     s0_icache_req_cyl := debug_tsc_reg
+  //   }
+  // }
 
   bpd.io.f0_req.valid      := s0_valid
   bpd.io.f0_req.bits.pc    := s0_vpc
@@ -539,21 +539,21 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
 
   val f2_correct_f1_ghist = s1_ghist =/= f2_predicted_ghist && enableGHistStallRepair.B
 
-  if (DEBUG_PRINTF) {
-    val debug_tsc_reg = RegInit(0.U(xLen.W))
-    debug_tsc_reg := debug_tsc_reg + 1.U
-    when (s2_valid && !f2_clear && ((icache.io.resp.valid && icache.io.resp.bits.hit) || ((s2_tlb_resp.ae.inst || s2_tlb_resp.pf.inst) && !s2_tlb_miss)) && (s2_itlb_pmiss || s2_itlb_smiss)) {
-      when (s2_itlb_pmiss) {
-        printf("%d | [FRONTE] | itlb_miss!  | 0x%x\n", debug_tsc_reg, s2_vpc);
-      } .otherwise {
-        printf("%d | [FRONTE] | itlb_miss   | 0x%x\n", debug_tsc_reg, s2_vpc);
-      }
-    }
-    /* fixme: which condition means we got the icache resp ? */
-    when(s2_valid && (icache.io.resp.valid && icache.io.resp.bits.hit) && !f2_clear){
-      printf("%d | [FRONTE] | icache req:%d resp:%d\n", debug_tsc_reg, s2_icache_req_cyl, icache.io.resp.bits.resp_cycle)
-    }
-  }
+  // if (DEBUG_PRINTF) {
+  //   val debug_tsc_reg = RegInit(0.U(xLen.W))
+  //   debug_tsc_reg := debug_tsc_reg + 1.U
+  //   when (s2_valid && !f2_clear && ((icache.io.resp.valid && icache.io.resp.bits.hit) || ((s2_tlb_resp.ae.inst || s2_tlb_resp.pf.inst) && !s2_tlb_miss)) && (s2_itlb_pmiss || s2_itlb_smiss)) {
+  //     when (s2_itlb_pmiss) {
+  //       printf("%d | [FRONTE] | itlb_miss!  | 0x%x\n", debug_tsc_reg, s2_vpc);
+  //     } .otherwise {
+  //       printf("%d | [FRONTE] | itlb_miss   | 0x%x\n", debug_tsc_reg, s2_vpc);
+  //     }
+  //   }
+  //   /* fixme: which condition means we got the icache resp ? */
+  //   when(s2_valid && (icache.io.resp.valid && icache.io.resp.bits.hit) && !f2_clear){
+  //     printf("%d | [FRONTE] | icache req:%d resp:%d\n", debug_tsc_reg, s2_icache_req_cyl, icache.io.resp.bits.resp_cycle)
+  //   }
+  // }
 
 
   // TEA changed how the icache responds, now valid must be evaluated together with hit

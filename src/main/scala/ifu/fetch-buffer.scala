@@ -182,8 +182,8 @@ class FetchBuffer(implicit p: Parameters) extends BoomModule
         for (w <- 0 until bankWidth) {
           val i = (b * bankWidth) + w
           when(io.enq.bits.mask(i)) {
-            printf("%d | [FETCHB] | enqueue     | 0x%x DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(in_uops(i)), instrFromUOp(in_uops(i)));
-            printf("%d | [FETCHB] | i$ req:%d resp:%d | 0x%x DASM(0x%x)\n", debug_tsc_reg,in_uops(i).icache_req_cyl, in_uops(i).icache_resp_cyl, pcFromUOp(in_uops(i)), instrFromUOp(in_uops(i)));
+            // printf("%d | [FETCHB] | enqueue     | 0x%x DASM(0x%x)\n", debug_tsc_reg, pcFromUOp(in_uops(i)), instrFromUOp(in_uops(i)));
+            // printf("%d | [FETCHB] | i$ req:%d resp:%d | 0x%x DASM(0x%x)\n", debug_tsc_reg,in_uops(i).icache_req_cyl, in_uops(i).icache_resp_cyl, pcFromUOp(in_uops(i)), instrFromUOp(in_uops(i)));
             in_uops(i).fetch_buf_enq_cycle := debug_tsc_reg
           }
         }
@@ -237,18 +237,18 @@ class FetchBuffer(implicit p: Parameters) extends BoomModule
   io.deq.bits.uops zip Mux1H(head, deq_vec) map {case (d,q) => d.bits  := q}
   io.deq.valid := deq_valids.reduce(_||_)
 
-  if (DEBUG_PRINTF) {
-    def instrFromUOp(uop: MicroOp) = if (uop.is_rvc == true.B) uop.debug_inst(15, 0) else uop.debug_inst
-    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-    val debug_tsc_reg = RegInit(0.U(xLen.W))
-    debug_tsc_reg := debug_tsc_reg + 1.U
-    for (i <- 0 until coreWidth) {
-        val uop = io.deq.bits.uops(i).bits
-        when(deq_valids(i)) {
-          printf("%d | [FETCHB] | dequeue | $:%x BP:%x | 0x%x DASM(0x%x)\n", debug_tsc_reg, uop.tea_psv.icache_miss.asUInt, uop.tea_psv.branch_miss.asUInt, pcFromUOp(uop), instrFromUOp(uop));
-      }
-    }
-  }
+  // if (DEBUG_PRINTF) {
+  //   def instrFromUOp(uop: MicroOp) = if (uop.is_rvc == true.B) uop.debug_inst(15, 0) else uop.debug_inst
+  //   def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+  //   val debug_tsc_reg = RegInit(0.U(xLen.W))
+  //   debug_tsc_reg := debug_tsc_reg + 1.U
+  //   for (i <- 0 until coreWidth) {
+  //       val uop = io.deq.bits.uops(i).bits
+  //       when(deq_valids(i)) {
+  //         printf("%d | [FETCHB] | dequeue | $:%x BP:%x | 0x%x DASM(0x%x)\n", debug_tsc_reg, uop.tea_psv.icache_miss.asUInt, uop.tea_psv.branch_miss.asUInt, pcFromUOp(uop), instrFromUOp(uop));
+  //     }
+  //   }
+  // }
 
   //-------------------------------------------------------------
   // **** Update State ****
