@@ -171,6 +171,9 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   val pred_bypasses = Wire(Vec(jmp_unit.numBypassStages, Valid(new ExeUnitResp(1))))
   require(jmp_unit.bypassable)
 
+  def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+  def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+
   // --------------------------------------
   // Dealing with branch resolutions
 
@@ -284,6 +287,10 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   val debug_jals    = Reg(Vec(4, UInt(xLen.W)))
   val debug_jalrs   = Reg(Vec(4, UInt(xLen.W)))
 
+  val cpu_cycle = csr.io.time.pad(64)
+  val cycle = if (DEBUG_CPU_CYCLE) cpu_cycle else debug_tsc_reg
+
+
   for (j <- 0 until 4) {
     debug_brs(j) := debug_brs(j) + PopCount(VecInit((0 until coreWidth) map {i =>
       rob.io.commit.arch_valids(i) &&
@@ -365,11 +372,23 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------
+
+
+  // if (DEBUG_PRINTF) {
+    when (b2.mispredict) {
+      // printf("%d | [CORE]| branch | 0x%x DASM(0x%x)\n", cycle, pcFromUOp(b2.uop), instrFromUOp(b2.uop))
+      b2.uop.finish := cycle
+    }
+  // }
+
+
   // **** Fetch Stage/Frontend ****
   //-------------------------------------------------------------
   //-------------------------------------------------------------
   io.ifu.redirect_val         := false.B
   io.ifu.redirect_flush       := false.B
+  io.ifu.cpu_cycle := cpu_cycle
+  io.ifu.tsc_reg := debug_tsc_reg
 
   // Breakpoint info
   io.ifu.status  := csr.io.status
@@ -495,13 +514,31 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.ifu.fetchpacket.ready := dec_ready
   val dec_fbundle = io.ifu.fetchpacket.bits
 
+  val dec_fbundle_uops = Wire(Vec(coreWidth, new MicroOp()))
+  for(w <- 0 until coreWidth){
+      dec_fbundle_uops(w) := dec_fbundle.uops(w).bits
+  }
+
+  /* fixme: fetch ? */
+  when(io.ifu.fetchpacket.ready){
+    for (w <- 0 until coreWidth){
+      when(io.ifu.fetchpacket.bits.uops(w).valid){
+        dec_fbundle_uops(w).fetch := cycle
+        // if (DEBUG_PRINTF){
+        //   printf("%d | [core] | fetch |%d| %x DASM(0x%x) \n", cycle, dec_fbundle_uops(w).fetch, pcFromUOp(dec_fbundle_uops(w)), instrFromUOp(dec_fbundle_uops(w)))
+        // }
+      }
+    }
+  }
+  
+
   //-------------------------------------------------------------
   // Decoders
 
   for (w <- 0 until coreWidth) {
     dec_valids(w)                      := io.ifu.fetchpacket.valid && dec_fbundle.uops(w).valid &&
                                           !dec_finished_mask(w)
-    decode_units(w).io.enq.uop         := dec_fbundle.uops(w).bits
+    decode_units(w).io.enq.uop         := dec_fbundle_uops(w)
     decode_units(w).io.status          := csr.io.status
     decode_units(w).io.csr_decode      <> csr.io.decode(w)
     decode_units(w).io.interrupt       := csr.io.interrupt
@@ -509,6 +546,19 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
     dec_uops(w) := decode_units(w).io.deq.uop
   }
+
+  // if (DEBUG_PRINTF){
+  //   when(dec_valids.reduce(_||_)){
+  //     printf("%d | [core] | icache", cycle)
+  //     for (i <- 0 until coreWidth){
+  //       when(dec_valids(i)){
+  //         printf("|%d:%d|%x ", dec_uops(i).icache_req, dec_uops(i).icache_resp, pcFromUOp(dec_uops(i)))
+  //       }
+  //     }
+  //     printf("\n")
+  //   }
+  // }
+
 
   //-------------------------------------------------------------
   // FTQ GetPC Port Arbitration
@@ -584,6 +634,27 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     dec_finished_mask := dec_fire.asUInt | dec_finished_mask
   }
 
+  for (w <- 0 until coreWidth){
+    when(dec_fire(w)){
+        dec_uops(w).dec_fire := cycle
+      }
+  }
+
+  // if (DEBUG_PRINTF){
+  //   when(dec_fire.reduce(_||_)){
+  //     printf("%d | [core] | dec | fire ", cycle)
+  //     for (w <- 0 until coreWidth){
+  //       when(dec_fire(w)){
+  //           printf("| %d | 0x%x, DASM(0x%x) ", dec_uops(w).dec_fire, pcFromUOp(dec_uops(w)), instrFromUOp(dec_uops(w)))
+  //         }
+  //     }
+  //     printf("\n")
+  //   }
+  // }
+  
+
+
+
   //-------------------------------------------------------------
   // Branch Mask Logic
 
@@ -629,7 +700,26 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   // Outputs
   dis_uops := rename_stage.io.ren2_uops
   dis_valids := rename_stage.io.ren2_mask
+  /* DEG:: rename only stall when no free register can be allocated */
   ren_stalls := rename_stage.io.ren_stalls
+
+  val ren_stalls_cycle    =  RegInit(VecInit(Seq.fill(coreWidth)(0.U(64.W))))
+
+  for (w <- 0 until coreWidth){
+    when(dis_valids(w)){
+      when(ren_stalls(w)){
+        ren_stalls_cycle(w) :=  ren_stalls_cycle(w) + 1.U
+      }.otherwise{
+        dis_uops(w).ren_fire := cycle    
+        dis_uops(w).ren_ready := cycle - ren_stalls_cycle(w)
+        ren_stalls_cycle(w) := 0.U
+        // if(DEBUG_PRINTF){
+        //   printf("%d | [core] | ren | %d:%d| 0x%x, DASM(0x%x)\n", cycle, dis_uops(w).ren_ready, dis_uops(w).ren_fire,pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
+        // }
+      }
+    }
+  }
+  
 
 
   /**
@@ -664,6 +754,17 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
     ren_stalls(w) := rename_stage.io.ren_stalls(w) || f_stall || p_stall
   }
+  
+  /* DEG:: rename stall is caused by insufficient (Float / Int) physical registers*/
+  // if(DEBUG_PRINTF){
+  //   when(ren_stalls.reduce(_||_)){
+  //     for (w <- 0 until coreWidth){
+  //       when(ren_stalls(w)){
+  //         printf("%d | [CORE] | ren_stall | 0x%x, DASM(0x%x)\n", cycle, pcFromUOp(rename_stage.io.ren2_uops(w)), instrFromUOp(rename_stage.io.ren2_uops(w)))
+  //       }
+  //     }
+  //   }
+  // }
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------
@@ -710,14 +811,45 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   //-------------------------------------------------------------
   // LDQ/STQ Allocation Logic
+  val dispatch_stall_lsq_full_cycles    =  RegInit(VecInit(Seq.fill(coreWidth)(0.U(64.W))))
+  val dispatch_stall_rob_full_cycles    =  RegInit(VecInit(Seq.fill(coreWidth)(0.U(64.W))))
+  val dispatch_stall_reason = RegInit(VecInit(Seq.fill(coreWidth)(0.U(1.W))))
+
 
   for (w <- 0 until coreWidth) {
-    val lsq_full = dis_valids(w) && !dis_uops(w).exception && ((dis_uops(w).uses_ldq && io.lsu.ldq_full(w)) || (dis_uops(w).uses_stq && io.lsu.stq_full(w)))
     // Dispatching instructions request load/store queue entries when they can proceed.
+    val lsq_full = dis_valids(w) && !dis_uops(w).exception && ((dis_uops(w).uses_ldq && io.lsu.ldq_full(w)) || (dis_uops(w).uses_stq && io.lsu.stq_full(w)))
     dis_uops(w).ldq_idx := io.lsu.dis_ldq_idx(w)
     dis_uops(w).stq_idx := io.lsu.dis_stq_idx(w)
     dis_uops(w).tea_psv.lsq_full := RegNext(lsq_full)
   }
+
+
+
+  when(dis_stalls.reduce(_||_)){
+    for (w <- 0 until coreWidth){
+      val lsq_full = dis_valids(w) && !dis_uops(w).exception && ((dis_uops(w).uses_ldq && io.lsu.ldq_full(w)) || (dis_uops(w).uses_stq && io.lsu.stq_full(w)))
+      when(dis_stalls(w) && rob.io.full){
+        dispatch_stall_rob_full_cycles(w) := dispatch_stall_rob_full_cycles(w) + 1.U
+        // printf("%d | [core] | rob_full | %d | 0x%x, DASM(0x%x)\n", cycle, dispatch_stall_rob_full_cycles(w),pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
+      }
+      when(dis_stalls(w) && lsq_full){
+        dispatch_stall_lsq_full_cycles(w) := dispatch_stall_lsq_full_cycles(w) + 1.U
+        // printf("%d | [core] | lsq_full | %d |0x%x, DASM(0x%x)\n", cycle, dispatch_stall_lsq_full_cycles(w), pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
+      }
+    }
+  }
+  for (w <- 0 until coreWidth){
+    when(dis_fire(w)){
+        dis_uops(w).dis_rob_ready := cycle - dispatch_stall_rob_full_cycles(w)
+        dis_uops(w).dis_lsq_ready := cycle - dispatch_stall_lsq_full_cycles(w)
+        dis_uops(w).dis_fire := cycle        
+      // printf("%d | [core] | dis | %d %d -> %d | 0x%x, DASM(0x%x)\n", cycle, dis_uops(w).dis_rob_ready,dis_uops(w).dis_lsq_ready, dis_uops(w).dis_fire,pcFromUOp(dis_uops(w)), instrFromUOp(dis_uops(w)))
+      dispatch_stall_rob_full_cycles(w) := 0.U
+      dispatch_stall_lsq_full_cycles(w) := 0.U
+    }
+  }
+  
 
   //-------------------------------------------------------------
   // Rob Allocation Logic
@@ -726,6 +858,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   rob.io.enq_uops   := dis_uops
   rob.io.enq_partial_stall := dis_stalls.last // TODO come up with better ROB compacting scheme.
   rob.io.debug_tsc := debug_tsc_reg
+  rob.io.cpu_cycle := cpu_cycle
   rob.io.csr_stall := csr.io.csr_stall
 
   // Minor hack: ecall and breaks need to increment the FTQ deq ptr earlier than commit, since
@@ -875,6 +1008,12 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     iu.io.pred_wakeup_port.valid := false.B
     iu.io.pred_wakeup_port.bits := DontCare
   }
+
+  issue_units map { iu =>
+    iu.io.tsc_reg := debug_tsc_reg
+    iu.io.cpu_cycle := cpu_cycle
+  }
+
   if (enableSFBOpt) {
     int_iss_unit.io.pred_wakeup_port.valid := pred_wakeup.valid
     int_iss_unit.io.pred_wakeup_port.bits := pred_wakeup.bits.uop.pdst
@@ -926,11 +1065,23 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
         iss_uops(iss_idx)   := mem_iss_unit.io.iss_uops(mem_iss_cnt)
         mem_iss_unit.io.fu_types(mem_iss_cnt) := Mux(pause_mem, 0.U, fu_types)
         mem_iss_cnt += 1
+        when(iss_valids(iss_idx) && !pause_mem){
+          iss_uops(iss_idx).issue_fire := cycle
+          // if (DEBUG_PRINTF){
+          //   printf("%d | [core] | mem | issue | %d -> %d | 0x%x, DASM(0x%x)\n", cycle, iss_uops(iss_idx).issue_ready,iss_uops(iss_idx).issue_fire,pcFromUOp(iss_uops(iss_idx)), instrFromUOp(iss_uops(iss_idx)))
+          // }
+        }
       } else {
         iss_valids(iss_idx) := int_iss_unit.io.iss_valids(int_iss_cnt)
         iss_uops(iss_idx)   := int_iss_unit.io.iss_uops(int_iss_cnt)
         int_iss_unit.io.fu_types(int_iss_cnt) := fu_types
         int_iss_cnt += 1
+        when(iss_valids(iss_idx)){
+          iss_uops(iss_idx).issue_fire := cycle
+          // if (DEBUG_PRINTF){
+          //   printf("%d | [core] | int | issue | %d -> %d | 0x%x, DASM(0x%x)\n", cycle, iss_uops(iss_idx).issue_ready,iss_uops(iss_idx).issue_fire , pcFromUOp(iss_uops(iss_idx)), instrFromUOp(iss_uops(iss_idx)))
+          // }
+        }
       }
       iss_idx += 1
     }
@@ -976,7 +1127,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     iregister_read.io.iss_valids(w) :=
       iss_valids(w) && !(io.lsu.ld_miss && (iss_uops(w).iw_p1_poisoned || iss_uops(w).iw_p2_poisoned))
   }
-  iregister_read.io.iss_uops := iss_uops
+  iregister_read.io.iss_uops := iss_uops  
   iregister_read.io.iss_uops map { u => u.iw_p1_poisoned := false.B; u.iw_p2_poisoned := false.B }
 
   iregister_read.io.brupdate := brupdate
@@ -1120,6 +1271,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   io.lsu.rob_pnr_idx  := rob.io.rob_pnr_idx
 
   io.lsu.tsc_reg := debug_tsc_reg
+  io.lsu.cpu_cycle := cpu_cycle
 
 
   if (usingFPU) {
@@ -1150,7 +1302,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       def wbIsValid(rtype: UInt) =
         wbresp.valid && wbresp.bits.uop.rf_wen && wbresp.bits.uop.dst_rtype === rtype
       val wbReadsCSR = wbresp.bits.uop.ctrl.csr_cmd =/= freechips.rocketchip.rocket.CSR.N
-
       iregfile.io.write_ports(w_cnt).valid     := wbIsValid(RT_FIX)
       iregfile.io.write_ports(w_cnt).bits.addr := wbpdst
       wbresp.ready := true.B
@@ -1200,6 +1351,29 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   // **** Commit Stage ****
   //-------------------------------------------------------------
   //-------------------------------------------------------------
+
+    for (i <- 0 until coreWidth){
+      val uop = rob.io.commit.uops(i)
+      when(rob.io.commit.arch_valids(i) && !csr.io.csr_stall){
+        printf("GRA,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,0x%x,\"DASM(0x%x)\"\n", 
+            uop.commit,
+            uop.icache_req,
+            uop.icache_resp,
+            uop.fetch,
+            uop.dec_fire,
+            uop.ren_fire,
+            uop.dis_fire,
+            uop.issue_ready,
+            uop.issue_fire,
+            uop.mem_req,
+            uop.mem_resp,
+            uop.finish,
+            pcFromUOp(uop), 
+            instrFromUOp(uop)
+        )
+      }
+    }
+    
 
   // Writeback
   // ---------
@@ -1323,6 +1497,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
 
   if (usingFPU) {
     fp_pipeline.io.debug_tsc_reg := debug_tsc_reg
+    fp_pipeline.io.cpu_cycle := cpu_cycle
   }
 
   //-------------------------------------------------------------
@@ -1420,25 +1595,6 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   coreMonitorBundle.reset  := reset
 
   //-------------------------------------------------------------
-  if (DEBUG_PRINTF) {
-    val exception = rob.io.com_xcpt.valid
-    val committing = !exception && !rob.io.commit.blocked && rob.io.commit.arch_valids.reduce(_||_)
-    val validHead = !exception && !rob.io.commit.blocked && rob.io.commit.instr_valids.reduce(_||_)
-    val robPopulated = validHead && !RegNext(validHead)
-    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
-    def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-    when (committing || exception || robPopulated) {
-      printf("%d |   [CORE] | rob         | [%b%b%b]", debug_tsc_reg, committing, robPopulated, exception)
-      for (i <- 0 until coreWidth) {
-        printf(" | [%b%b] 0x%x DASM(0x%x)",
-          rob.io.commit.arch_valids(i),
-          rob.io.commit.instr_valids(i),
-          pcFromUOp(rob.io.commit.uops(i)),
-          instrFromUOp(rob.io.commit.uops(i)))
-      }
-      printf("\n")
-    }
-  }
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------

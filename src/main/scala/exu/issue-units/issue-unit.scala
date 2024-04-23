@@ -89,6 +89,7 @@ class IssueUnitIO(
   val event_empty      = Output(Bool()) // used by HPM events; is the issue unit empty?
 
   val tsc_reg          = Input(UInt(width=xLen.W))
+  val cpu_cycle = Input(UInt(xLen.W))
 }
 
 /**
@@ -160,6 +161,8 @@ abstract class IssueUnit(
     issue_slots(i).ldspec_miss      := io.ld_miss
     issue_slots(i).brupdate         := io.brupdate
     issue_slots(i).kill             := io.flush_pipeline
+    issue_slots(i).tsc_reg          := io.tsc_reg
+    issue_slots(i).cpu_cycle        := io.cpu_cycle
   }
 
   io.event_empty := !(issue_slots.map(s => s.valid).reduce(_|_))

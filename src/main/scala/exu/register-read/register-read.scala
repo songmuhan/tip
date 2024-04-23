@@ -84,6 +84,8 @@ class RegisterRead(
     rrd_valids(w) := RegNext(rrd_decode_unit.io.rrd_valid &&
                 !IsKilledByBranch(io.brupdate, rrd_decode_unit.io.rrd_uop))
     rrd_uops(w)   := RegNext(GetNewUopAndBrMask(rrd_decode_unit.io.rrd_uop, io.brupdate))
+    rrd_uops(w).issue_ready := RegNext(io.iss_uops(w).issue_ready)
+    rrd_uops(w).issue_fire := RegNext(io.iss_uops(w).issue_fire)
   }
 
   //-------------------------------------------------------------
@@ -132,6 +134,8 @@ class RegisterRead(
     exe_reg_valids(w) := Mux(rrd_kill, false.B, rrd_valids(w))
     // TODO use only the valids signal, don't require us to set nullUop
     exe_reg_uops(w)   := Mux(rrd_kill, NullMicroOp, rrd_uops(w))
+    exe_reg_uops(w).issue_ready := rrd_uops(w).issue_ready
+    exe_reg_uops(w).issue_fire := rrd_uops(w).issue_fire
 
     exe_reg_uops(w).br_mask := GetNewBrMask(io.brupdate, rrd_uops(w))
 
@@ -206,11 +210,36 @@ class RegisterRead(
 
   //-------------------------------------------------------------
   // set outputs to execute pipelines
+  val debug_tsc_reg = RegInit(0.U(xLen.W))
+  debug_tsc_reg := debug_tsc_reg + 1.U
+  def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+  def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+
   for (w <- 0 until issueWidth) {
     val numReadPorts = numReadPortsArray(w)
 
     io.exe_reqs(w).valid    := exe_reg_valids(w)
     io.exe_reqs(w).bits.uop := exe_reg_uops(w)
+    io.exe_reqs(w).bits.uop.issue_ready := exe_reg_uops(w).issue_ready
+    io.exe_reqs(w).bits.uop.issue_fire := exe_reg_uops(w).issue_fire
+
+    // if (DEBUG_PRINTF) {
+
+      
+    //   when(exe_reg_valids(w)){
+    //     val uop = io.exe_reqs(w).bits.uop
+    //     printf("%d | [register] | exe_iss |%d:%d| 0x%x DASM(0x%x)\n",
+    //       debug_tsc_reg,
+    //       uop.issue_ready,
+    //       uop.issue_fire,
+    //       pcFromUOp(uop),
+    //       instrFromUOp(uop)
+    //     )
+    //   }
+    // }
+
+
+
     if (numReadPorts > 0) io.exe_reqs(w).bits.rs1_data := exe_reg_rs1_data(w)
     if (numReadPorts > 1) io.exe_reqs(w).bits.rs2_data := exe_reg_rs2_data(w)
     if (numReadPorts > 2) io.exe_reqs(w).bits.rs3_data := exe_reg_rs3_data(w)

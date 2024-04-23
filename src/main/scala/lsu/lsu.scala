@@ -114,6 +114,9 @@ class LSUDMemIO(implicit p: Parameters, edge: TLEdgeOut) extends BoomBundle()(p)
 class LSUClearPSV(implicit p: Parameters) extends BoomBundle()(p) {
   val dtlb_pmiss = Bool()
   val dtlb_smiss = Bool()
+  val addr = UInt(coreMaxAddrBits.W)
+  val issue_ready = UInt(64.W)
+  val issue_fire = UInt(64.W)
 }
 
 class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
@@ -157,6 +160,7 @@ class LSUCoreIO(implicit p: Parameters) extends BoomBundle()(p)
   val lxcpt       = Output(Valid(new Exception))
 
   val tsc_reg     = Input(UInt())
+  val cpu_cycle  = Input(UInt())
 
   val perf        = Output(new Bundle {
     val acquire = Bool()
@@ -270,6 +274,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
 
   def widthMap[T <: Data](f: Int => T) = VecInit((0 until memWidth).map(f))
+
+  def instrFromUOp(uop: MicroOp) = if (uop.is_rvc == true.B) uop.debug_inst(15, 0) else uop.debug_inst
+  def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits - 1, 0)
+
+  val cycle = if (DEBUG_CPU_CYCLE) io.core.cpu_cycle else io.core.tsc_reg
 
 
   //-------------------------------------------------------------
@@ -399,6 +408,45 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     }
   }
 
+  for (w <- 0 until memWidth) {
+    when(io.core.exe(w).req.valid) {
+      val uop = exe_req(w).bits.uop
+      val ldq_idx = uop.ldq_idx
+      val stq_idx = uop.stq_idx
+
+      when(uop.uses_ldq){
+        ldq(ldq_idx).bits.uop.issue_ready := uop.issue_ready
+        ldq(ldq_idx).bits.uop.issue_fire := uop.issue_fire
+        // if (DEBUG_PRINTF){
+        //   printf("%d | [lsu] | ld:%d| iss: %d %d | %x DASM(0x%x)\n",
+        //     io.core.tsc_reg,
+        //     ldq_idx,
+        //     ldq(ldq_idx).bits.uop.issue_ready,
+        //     ldq(ldq_idx).bits.uop.issue_fire,
+        //     pcFromUOp(ldq(ldq_idx).bits.uop),
+        //     instrFromUOp(ldq(ldq_idx).bits.uop)
+        //   )
+        // }
+
+      }.elsewhen(uop.uses_stq){
+        stq(stq_idx).bits.uop.issue_ready := uop.issue_ready
+        stq(stq_idx).bits.uop.issue_fire := uop.issue_fire
+        // if(DEBUG_PRINTF){
+        //   printf("%d | [lsu] | st:%d| iss: %d %d | %x DASM(0x%x)\n",
+        //     io.core.tsc_reg,
+        //     stq_idx,
+        //     stq(stq_idx).bits.uop.issue_ready,
+        //     stq(stq_idx).bits.uop.issue_fire,
+        //     pcFromUOp(stq(stq_idx).bits.uop),
+        //     instrFromUOp(stq(stq_idx).bits.uop)
+        //   )
+        // }
+      }
+    }
+  }
+  
+
+
   // -------------------------------
   // Assorted signals for scheduling
 
@@ -419,8 +467,19 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val ldq_incoming_idx = widthMap(i => exe_req(i).bits.uop.ldq_idx)
   val ldq_incoming_e   = widthMap(i => ldq(ldq_incoming_idx(i)))
 
+  // for (w <- 0 until memWidth){
+  //   val idx = exe_req(w).bits.uop.ldq_idx
+  //   ldq(idx).bits.uop.issue_ready := exe_req(w).bits.uop.issue_ready
+  //   ldq(idx).bits.uop.issue_fire  := exe_req(w).bits.uop.issue_fire
+  // }
+
   val stq_incoming_idx = widthMap(i => exe_req(i).bits.uop.stq_idx)
   val stq_incoming_e   = widthMap(i => stq(stq_incoming_idx(i)))
+  // for (w <- 0 until memWidth){
+  //   val idx = exe_req(w).bits.uop.stq_idx
+  //   stq(idx).bits.uop.issue_ready := exe_req(w).bits.uop.issue_ready
+  //   stq(idx).bits.uop.issue_fire  := exe_req(w).bits.uop.issue_fire
+  // }
 
   val ldq_retry_idx = RegNext(AgePriorityEncoder((0 until numLdqEntries).map(i => {
     val e = ldq(i).bits
@@ -728,19 +787,17 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       dtlb.io.resp(w).pf.ld || dtlb.io.resp(w).pf.st || dtlb.io.resp(w).ae.ld || dtlb.io.resp(w).ae.st ||
       dtlb.io.resp(w).gf.ld || dtlb.io.resp(w).gf.st))
 
-  if (DEBUG_PRINTF) {
-    for (w <- 0 until memWidth) {
-      when(exe_tlb_primary_miss(w) || exe_tlb_secondary_miss(w)) {
-        def instrFromUOp(uop: MicroOp) = if (uop.is_rvc == true.B) uop.debug_inst(15, 0) else uop.debug_inst
-        def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits - 1, 0)
-        when(exe_tlb_primary_miss(w)) {
-          printf("%d |    [LSU] | dtlb_miss!  | 0x%x from 0x%x DASM(0x%x)\n", io.core.tsc_reg, exe_tlb_vaddr(w), pcFromUOp(exe_tlb_uop(w)), instrFromUOp(exe_tlb_uop(w)))
-        } .otherwise {
-          printf("%d |    [LSU] | dtlb_miss   | 0x%x from 0x%x DASM(0x%x)\n", io.core.tsc_reg, exe_tlb_vaddr(w), pcFromUOp(exe_tlb_uop(w)), instrFromUOp(exe_tlb_uop(w)))
-        }
-      }
-    }
-  }
+  // if (DEBUG_PRINTF) {
+  //   for (w <- 0 until memWidth) {
+  //     when(exe_tlb_primary_miss(w) || exe_tlb_secondary_miss(w)) {
+  //       when(exe_tlb_primary_miss(w)) {
+  //         printf("%d |    [LSU] | dtlb_miss!  | 0x%x from 0x%x DASM(0x%x)\n", io.core.tsc_reg, exe_tlb_vaddr(w), pcFromUOp(exe_tlb_uop(w)), instrFromUOp(exe_tlb_uop(w)))
+  //       } .otherwise {
+  //         printf("%d |    [LSU] | dtlb_miss   | 0x%x from 0x%x DASM(0x%x)\n", io.core.tsc_reg, exe_tlb_vaddr(w), pcFromUOp(exe_tlb_uop(w)), instrFromUOp(exe_tlb_uop(w)))
+  //       }
+  //     }
+  //   }
+  // }
 
   for (w <- 0 until memWidth) {
     assert (exe_tlb_paddr(w) === dtlb.io.resp(w).paddr || exe_req(w).bits.sfence.valid, "[lsu] paddrs should match.")
@@ -865,17 +922,36 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
     dmem_req(w).bits.uop.memory_latency.foreach(_ := io.core.tsc_reg)
 
-    if (DEBUG_PRINTF) {
-      def instrFromUOp(uop: MicroOp) = if (uop.is_rvc == true.B) uop.debug_inst(15, 0) else uop.debug_inst
-      def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-      when(dmem_req_fire(w)) {
-        printf("%d |    [LSU] | dmem_req    | 0x%x @ 0x%x DASM(0x%x)\n",
-          io.core.tsc_reg,
-          dmem_req(w).bits.addr,
-          pcFromUOp(dmem_req(w).bits.uop),
-          instrFromUOp(dmem_req(w).bits.uop)
-        )
-      }
+      when(dmem_req_fire(w)){
+        val uop = dmem_req(w).bits.uop
+        when(uop.uses_ldq && ldq(uop.ldq_idx).bits.uop.mem_req === 0.U){
+          ldq(uop.ldq_idx).bits.uop.mem_req := cycle
+            // if (DEBUG_PRINTF) {
+            //   printf("%d | [lsu] | ld %d | dmem_req | iss %d %d | @0x%x | 0x%x DASM(0x%x)\n",
+            //     cycle,
+            //     uop.ldq_idx,
+            //     ldq(uop.ldq_idx).bits.uop.issue_ready,
+            //     ldq(uop.ldq_idx).bits.uop.issue_fire,
+            //     ldq(uop.ldq_idx).bits.uop.addr,
+            //     pcFromUOp(ldq(uop.ldq_idx).bits.uop),
+            //     instrFromUOp(ldq(uop.ldq_idx).bits.uop)
+            //   )
+            // }
+        }
+        when(uop.uses_stq && stq(uop.stq_idx).bits.uop.mem_req === 0.U){
+          stq(uop.stq_idx).bits.uop.mem_req := cycle
+          // if (DEBUG_PRINTF){
+          //   printf("%d | [lsu] | st %d | dmem_req | iss %d %d | @0x%x | 0x%x DASM(0x%x)\n",
+          //     cycle,
+          //     uop.stq_idx,
+          //     stq(uop.stq_idx).bits.uop.issue_ready,
+          //     stq(uop.stq_idx).bits.uop.issue_fire,
+          //     stq(uop.stq_idx).bits.uop.addr,
+          //     pcFromUOp(stq(uop.stq_idx).bits.uop),
+          //     instrFromUOp(stq(uop.stq_idx).bits.uop)
+          //   )
+          // }
+        }
     }
 
     //-------------------------------------------------------------
@@ -967,6 +1043,7 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val fired_hella_wakeup   = RegNext(will_fire_hella_wakeup)
 
   val mem_incoming_uop     = RegNext(widthMap(w => UpdateBrMask(io.core.brupdate, exe_req(w).bits.uop)))
+  val mem_incoming_addr    = RegNext(widthMap(w => exe_req(w).bits.addr))
   val mem_ldq_incoming_e   = RegNext(widthMap(w => UpdateBrMask(io.core.brupdate, ldq_incoming_e(w))))
   val mem_stq_incoming_e   = RegNext(widthMap(w => UpdateBrMask(io.core.brupdate, stq_incoming_e(w))))
   val mem_ldq_wakeup_e     = RegNext(UpdateBrMask(io.core.brupdate, ldq_wakeup_e))
@@ -993,6 +1070,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val clr_bsy_brmask  = Reg(Vec(memWidth, UInt(maxBrCount.W)))
   val clr_bsy_dtlb_pmiss = RegInit(widthMap(w => false.B))
   val clr_bsy_dtlb_smiss = RegInit(widthMap(w => false.B))
+  val clr_bsy_addr = RegInit(widthMap(w => 0.U(coreMaxAddrBits.W)))
+  val clr_bsy_iss_ready = RegInit(widthMap(w => 0.U(64.W)))
+  val clr_bsy_iss_fire = RegInit(widthMap(w => 0.U(64.W)))
 
   for (w <- 0 until memWidth) {
     clr_bsy_valid   (w) := false.B
@@ -1001,7 +1081,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
     clr_bsy_dtlb_pmiss (w) := false.B
     clr_bsy_dtlb_smiss (w) := false.B
-
+    clr_bsy_addr(w) := 0.U
+    clr_bsy_iss_ready(w) := 0.U
+    clr_bsy_iss_fire(w) := 0.U
 
     when (fired_stad_incoming(w)) {
       clr_bsy_valid   (w) := mem_stq_incoming_e(w).valid           &&
@@ -1014,7 +1096,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       val stq_idx = mem_stq_incoming_e(w).bits.uop.stq_idx
       clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
       clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
-
+      clr_bsy_addr(w) := stq(stq_idx).bits.addr.bits
+      clr_bsy_iss_ready(w):= stq(stq_idx).bits.uop.issue_ready
+      clr_bsy_iss_fire(w):= stq(stq_idx).bits.uop.issue_fire
     } .elsewhen (fired_sta_incoming(w)) {
       clr_bsy_valid   (w) := mem_stq_incoming_e(w).valid            &&
                              mem_stq_incoming_e(w).bits.data.valid  &&
@@ -1026,6 +1110,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       val stq_idx = mem_stq_incoming_e(w).bits.uop.stq_idx
       clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
       clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
+      clr_bsy_addr(w) := stq(stq_idx).bits.addr.bits  
+      clr_bsy_iss_ready(w):= stq(stq_idx).bits.uop.issue_ready
+      clr_bsy_iss_fire(w):= stq(stq_idx).bits.uop.issue_fire
     } .elsewhen (fired_std_incoming(w)) {
       clr_bsy_valid   (w) := mem_stq_incoming_e(w).valid                 &&
                              mem_stq_incoming_e(w).bits.addr.valid       &&
@@ -1037,12 +1124,19 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       val stq_idx = mem_stq_incoming_e(w).bits.uop.stq_idx
       clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
       clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
+      clr_bsy_addr(w) := stq(stq_idx).bits.addr.bits
+      clr_bsy_iss_ready(w):= stq(stq_idx).bits.uop.issue_ready
+      clr_bsy_iss_fire(w):= stq(stq_idx).bits.uop.issue_fire
     } .elsewhen (fired_sfence(w)) {
       clr_bsy_valid   (w) := (w == 0).B // SFence proceeds down all paths, only allow one to clr the rob
       clr_bsy_rob_idx (w) := mem_incoming_uop(w).rob_idx
       clr_bsy_brmask  (w) := GetNewBrMask(io.core.brupdate, mem_incoming_uop(w))
       clr_bsy_dtlb_pmiss (w) := mem_incoming_uop(w).tea_psv.dtlb_pmiss
       clr_bsy_dtlb_smiss (w) := mem_incoming_uop(w).tea_psv.dtlb_smiss
+      clr_bsy_addr(w) := mem_incoming_addr(w)
+      /* fixme: sfence ? */
+      clr_bsy_iss_ready(w):= mem_incoming_uop(w).issue_ready
+      clr_bsy_iss_fire(w):= mem_incoming_uop(w).issue_fire
     } .elsewhen (fired_sta_retry(w)) {
       clr_bsy_valid   (w) := mem_stq_retry_e.valid            &&
                              mem_stq_retry_e.bits.data.valid  &&
@@ -1054,6 +1148,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       val stq_idx = mem_stq_retry_e.bits.uop.stq_idx
       clr_bsy_dtlb_pmiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_pmiss
       clr_bsy_dtlb_smiss (w) := stq(stq_idx).bits.uop.tea_psv.dtlb_smiss
+      clr_bsy_addr(w) := stq(stq_idx).bits.addr.bits
+      clr_bsy_iss_ready(w):= stq(stq_idx).bits.uop.issue_ready
+      clr_bsy_iss_fire(w):= stq(stq_idx).bits.uop.issue_fire
     }
 
     io.core.clr_bsy(w).valid := clr_bsy_valid(w) &&
@@ -1062,6 +1159,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     io.core.clr_bsy(w).bits  := clr_bsy_rob_idx(w)
     io.core.clr_bsy_psv(w).dtlb_pmiss  := clr_bsy_dtlb_pmiss(w)
     io.core.clr_bsy_psv(w).dtlb_smiss  := clr_bsy_dtlb_smiss(w)
+    io.core.clr_bsy_psv(w).addr := clr_bsy_addr(w)
+    io.core.clr_bsy_psv(w).issue_ready := clr_bsy_iss_ready(w)
+    io.core.clr_bsy_psv(w).issue_fire := clr_bsy_iss_fire(w)
   }
 
   val stdf_clr_bsy_valid   = RegInit(false.B)
@@ -1069,11 +1169,17 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val stdf_clr_bsy_brmask  = Reg(UInt(maxBrCount.W))
   val stdf_clr_bsy_dtlb_pmiss = RegInit(false.B)
   val stdf_clr_bsy_dtlb_smiss = RegInit(false.B)
+  val stdf_clr_bsy_addr = RegInit(0.U(coreMaxAddrBits.W))
+  val stdf_clr_bsy_iss_ready = RegInit(0.U(64.W))
+  val stdf_clr_bsy_iss_fire = RegInit(0.U(64.W))
+
   stdf_clr_bsy_valid   := false.B
   stdf_clr_bsy_rob_idx := 0.U
   stdf_clr_bsy_brmask  := 0.U
   stdf_clr_bsy_dtlb_pmiss := false.B
   stdf_clr_bsy_dtlb_smiss := false.B
+  stdf_clr_bsy_iss_ready := 0.U
+  stdf_clr_bsy_iss_fire := 0.U
   when (fired_stdf_incoming) {
     val s_idx = mem_stdf_uop.stq_idx
     stdf_clr_bsy_valid   := stq(s_idx).valid                 &&
@@ -1085,6 +1191,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     stdf_clr_bsy_brmask  := GetNewBrMask(io.core.brupdate, mem_stdf_uop)
     stdf_clr_bsy_dtlb_pmiss := stq(s_idx).bits.uop.tea_psv.dtlb_pmiss
     stdf_clr_bsy_dtlb_smiss := stq(s_idx).bits.uop.tea_psv.dtlb_smiss
+    stdf_clr_bsy_addr := stq(s_idx).bits.addr.bits
+    stdf_clr_bsy_iss_ready := stq(s_idx).bits.uop.issue_ready
+    stdf_clr_bsy_iss_fire := stq(s_idx).bits.uop.issue_fire
   }
 
 
@@ -1097,6 +1206,11 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
   io.core.clr_bsy_psv(memWidth).dtlb_pmiss := stdf_clr_bsy_dtlb_pmiss
   io.core.clr_bsy_psv(memWidth).dtlb_smiss := stdf_clr_bsy_dtlb_smiss
+  io.core.clr_bsy_psv(memWidth).addr := stdf_clr_bsy_addr
+  io.core.clr_bsy_psv(memWidth).issue_ready := stdf_clr_bsy_iss_ready
+  io.core.clr_bsy_psv(memWidth).issue_fire := stdf_clr_bsy_iss_fire
+
+  /* fixme: add forward address? */
 
   // Task 2: Do LD-LD. ST-LD searches for ordering failures
   //         Do LD-ST search for forwarding opportunities
@@ -1371,17 +1485,15 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val dmem_resp_fired = WireInit(widthMap(w => false.B))
 
   for (w <- 0 until memWidth) {
-    if (DEBUG_PRINTF) {
-      when(io.dmem.nack(w).valid) {
-        def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
-        def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits - 1, 0)
-        printf("%d |    [LSU] | dmem_nack   | 0x%x DASM(0x%x)\n",
-          io.core.tsc_reg,
-          pcFromUOp(io.dmem.resp(w).bits.uop),
-          instrFromUOp(io.dmem.resp(w).bits.uop)
-        )
-      }
-    }
+      // if (DEBUG_PRINTF) {
+      //   when(io.dmem.nack(w).valid) {
+      //     printf("%d | [lsu] | dmem_nack   | 0x%x DASM(0x%x)\n",
+      //       cycle,
+      //       pcFromUOp(io.dmem.resp(w).bits.uop),
+      //       instrFromUOp(io.dmem.resp(w).bits.uop)
+      //     )
+      //   }
+      // }
     // Handle nacks
     when (io.dmem.nack(w).valid)
     {
@@ -1404,19 +1516,32 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         }
       }
     }
-    if (DEBUG_PRINTF) {
-      when(io.dmem.resp(w).valid) {
-        def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
-
-        def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits - 1, 0)
-
-        printf("%d |    [LSU] | dmem_resp   | 0x%x DASM(0x%x)\n",
-          io.core.tsc_reg,
-          pcFromUOp(io.dmem.resp(w).bits.uop),
-          instrFromUOp(io.dmem.resp(w).bits.uop)
-        )
-      }
-    }
+    // if (DEBUG_PRINTF) {
+    //   when(io.dmem.resp(w).valid) {
+    //     val ldq_idx = io.dmem.resp(w).bits.uop.ldq_idx
+    //     val stq_idx = io.dmem.resp(w).bits.uop.stq_idx
+    //     when(io.dmem.resp(w).bits.uop.uses_stq){
+    //       val uop = stq(stq_idx).bits.uop
+    //       printf("%d | [lsu] | st |dmem_resp | %d %d| 0x%x DASM(0x%x)\n",
+    //         cycle,
+    //         uop.issue_ready,
+    //         uop.issue_fire,
+    //         pcFromUOp(uop),
+    //         instrFromUOp(uop)
+    //       )
+    //     }
+    //     .elsewhen(io.dmem.resp(w).bits.uop.uses_ldq){
+    //       val uop = ldq(ldq_idx).bits.uop
+    //       printf("%d | [lsu] | ld | dmem_resp | %d %d| 0x%x DASM(0x%x)\n",
+    //         cycle,
+    //         uop.issue_ready,
+    //         uop.issue_fire,
+    //         pcFromUOp(uop),
+    //         instrFromUOp(uop)
+    //       )
+    //     }
+    //   }
+    // }
 
     // Handle the response
     when (io.dmem.resp(w).valid)
@@ -1433,16 +1558,43 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
         val send_fresp = ldq(ldq_idx).bits.uop.dst_rtype === RT_FLT
 
         io.core.exe(w).iresp.bits.uop  := ldq(ldq_idx).bits.uop
+        io.core.exe(w).iresp.bits.uop.addr := ldq(ldq_idx).bits.addr.bits
         io.core.exe(w).fresp.bits.uop  := ldq(ldq_idx).bits.uop
+        io.core.exe(w).fresp.bits.uop.addr := ldq(ldq_idx).bits.addr.bits
+
         io.core.exe(w).iresp.valid     := send_iresp
         io.core.exe(w).iresp.bits.data := io.dmem.resp(w).bits.data
         io.core.exe(w).fresp.valid     := send_fresp
         io.core.exe(w).fresp.bits.data := io.dmem.resp(w).bits.data
 
         io.core.exe(w).iresp.bits.uop.tea_psv.dcache_miss := io.dmem.resp(w).bits.uop.tea_psv.dcache_miss
+        io.core.exe(w).iresp.bits.uop.issue_ready := ldq(ldq_idx).bits.uop.issue_ready
+        io.core.exe(w).iresp.bits.uop.issue_fire := ldq(ldq_idx).bits.uop.issue_fire
+        // if (DEBUG_PRINTF){
+        //   printf("%d | [lsu] | ld:%d| wb: %d %d | %x DASM(0x%x)\n",
+        //       io.core.tsc_reg,
+        //       ldq_idx,
+        //       ldq(ldq_idx).bits.uop.issue_ready,
+        //       ldq(ldq_idx).bits.uop.issue_fire,
+        //       pcFromUOp(ldq(ldq_idx).bits.uop),
+        //       instrFromUOp(ldq(ldq_idx).bits.uop)
+        //   )
+        // }
+
         io.core.exe(w).iresp.bits.uop.memory_latency.foreach(_ := memory_latency)
+        io.core.exe(w).iresp.bits.uop.mem_resp := cycle
+        io.core.exe(w).iresp.bits.uop.mem_req := ldq(ldq_idx).bits.uop.mem_req
+
+
         io.core.exe(w).fresp.bits.uop.tea_psv.dcache_miss := io.dmem.resp(w).bits.uop.tea_psv.dcache_miss
+        io.core.exe(w).fresp.bits.uop.issue_ready := ldq(ldq_idx).bits.uop.issue_ready
+        io.core.exe(w).fresp.bits.uop.issue_fire := ldq(ldq_idx).bits.uop.issue_fire
+
+
         io.core.exe(w).fresp.bits.uop.memory_latency.foreach(_ := memory_latency)
+        io.core.exe(w).fresp.bits.uop.mem_resp := cycle
+        io.core.exe(w).fresp.bits.uop.mem_req := ldq(ldq_idx).bits.uop.mem_req
+
 
         assert(send_iresp ^ send_fresp)
         dmem_resp_fired(w) := true.B
@@ -1462,6 +1614,9 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
 
           io.core.exe(w).iresp.bits.uop.tea_psv.dcache_miss := io.dmem.resp(w).bits.uop.tea_psv.dcache_miss
           io.core.exe(w).iresp.bits.uop.memory_latency.foreach(_ := memory_latency)
+          io.core.exe(w).iresp.bits.uop.mem_resp := cycle
+          io.core.exe(w).iresp.bits.uop.mem_req :=  io.dmem.req.bits(w).bits.uop.mem_req
+
 
           stq(io.dmem.resp(w).bits.uop.stq_idx).bits.debug_wb_data := io.dmem.resp(w).bits.data
         }
@@ -1496,19 +1651,23 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
       io.core.exe(w).fresp.bits.data := loadgen.data
 
       io.core.exe(w).iresp.bits.uop.memory_latency.foreach(_ := 0.U)
-      io.core.exe(w).fresp.bits.uop.memory_latency.foreach(_ := 0.U)
+      io.core.exe(w).fresp.bits.uop.memory_latency.foreach(_ := 0.U)      
+      io.core.exe(w).iresp.bits.uop.mem_resp  := cycle
+      io.core.exe(w).fresp.bits.uop.mem_resp  := cycle
+      io.core.exe(w).iresp.bits.uop.mem_req  := forward_uop.mem_req
+      io.core.exe(w).fresp.bits.uop.mem_req  := forward_uop.mem_req
 
       when (data_ready && live) {
 
-        if (DEBUG_PRINTF) {
-          def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
-          def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-          printf("%d |    [LSU] | ldst_fw     | 0x%x DASM(0x%x)\n",
-            io.core.tsc_reg,
-            pcFromUOp(forward_uop),
-            instrFromUOp(forward_uop)
-          )
-        }
+        // if (DEBUG_PRINTF) {
+        //   printf("%d | [lsu] | ldst_fw | %d %d| 0x%x DASM(0x%x)\n",
+        //     io.core.tsc_reg,
+        //     forward_uop.mem_req,
+        //     io.core.tsc_reg,
+        //     pcFromUOp(forward_uop),
+        //     instrFromUOp(forward_uop)
+        //   )
+        // }
 
         ldq(f_idx).bits.succeeded := data_ready
         ldq(f_idx).bits.forward_std_val := true.B

@@ -221,20 +221,25 @@ abstract class PipelinedFunctionalUnit(
 {
   // Pipelined functional unit is always ready.
   io.req.ready := true.B
+  val debug_tsc_reg = RegInit(0.U(xLen.W))
+  debug_tsc_reg := debug_tsc_reg + 1.U
 
   if (numStages > 0) {
     val r_valids = RegInit(VecInit(Seq.fill(numStages) { false.B }))
     val r_uops   = Reg(Vec(numStages, new MicroOp()))
+    val r_uops_cycle = Reg(Vec(numStages, UInt(64.W)))
 
     // handle incoming request
     r_valids(0) := io.req.valid && !IsKilledByBranch(io.brupdate, io.req.bits.uop) && !io.req.bits.kill
     r_uops(0)   := io.req.bits.uop
+    r_uops_cycle(0) := debug_tsc_reg
     r_uops(0).br_mask := GetNewBrMask(io.brupdate, io.req.bits.uop)
 
     // handle middle of the pipeline
     for (i <- 1 until numStages) {
       r_valids(i) := r_valids(i-1) && !IsKilledByBranch(io.brupdate, r_uops(i-1)) && !io.req.bits.kill
       r_uops(i)   := r_uops(i-1)
+      r_uops_cycle(i) := r_uops_cycle(i-1)
       r_uops(i).br_mask := GetNewBrMask(io.brupdate, r_uops(i-1))
 
       if (numBypassStages > 0) {
@@ -247,6 +252,20 @@ abstract class PipelinedFunctionalUnit(
     io.resp.valid    := r_valids(numStages-1) && !IsKilledByBranch(io.brupdate, r_uops(numStages-1))
     io.resp.bits.predicated := false.B
     io.resp.bits.uop := r_uops(numStages-1)
+    // if (DEBUG_PRINTF) {
+    //   def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+    //   def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
+      
+    //   when(io.resp.valid){
+    //     printf("%d | [FUNC-UNIT] | %d -> %d |0x%x DASM(0x%x)\n",
+    //       debug_tsc_reg,
+    //       r_uops_cycle(numStages-1),
+    //       debug_tsc_reg,
+    //       pcFromUOp(io.resp.bits.uop),
+    //       instrFromUOp(io.resp.bits.uop)
+    //     )
+    //   }
+    // }
     io.resp.bits.uop.br_mask := GetNewBrMask(io.brupdate, r_uops(numStages-1))
 
     // bypassing (TODO allow bypass vector to have a different size from numStages)

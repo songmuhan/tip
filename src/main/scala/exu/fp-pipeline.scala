@@ -52,6 +52,7 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
     val wb_pdsts         = Input(Vec(numWakeupPorts, UInt(width=fpPregSz.W)))
 
     val debug_tsc_reg    = Input(UInt(width=xLen.W))
+    val cpu_cycle = Input(UInt())
     val debug_wb_wdata   = Output(Vec(numWakeupPorts, UInt((fLen+1).W)))
   })
 
@@ -89,6 +90,7 @@ class FpPipeline(implicit p: Parameters) extends BoomModule with tile.HasFPUPara
   val iss_uops   = Wire(Vec(exe_units.numFrfReaders, new MicroOp()))
 
   issue_unit.io.tsc_reg := io.debug_tsc_reg
+  issue_unit.io.cpu_cycle := io.cpu_cycle
   issue_unit.io.brupdate := io.brupdate
   issue_unit.io.flush_pipeline := io.flush_pipeline
   // Don't support ld-hit speculation to FP window.

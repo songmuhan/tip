@@ -59,6 +59,9 @@ class IssueSlotIO(val numWakeupPorts: Int)(implicit p: Parameters) extends BoomB
     }
     Output(result)
   }
+
+  val tsc_reg = Input(UInt(xLen.W))
+  val cpu_cycle = Input(UInt(xLen.W))
 }
 
 /**
@@ -101,6 +104,8 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
 
   val slot_uop = RegInit(NullMicroOp)
   val next_uop = Mux(io.in_uop.valid, io.in_uop.bits, slot_uop)
+  
+  val cycle = if (DEBUG_CPU_CYCLE) io.cpu_cycle else io.tsc_reg
 
   //-----------------------------------------------------------------------------
   // next slot state computation
@@ -151,10 +156,13 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
     }
   }
 
+
   when (io.in_uop.valid) {
     slot_uop := io.in_uop.bits
     assert (is_invalid || io.clear || io.kill, "trying to overwrite a valid issue slot.")
   }
+
+
 
   // Wakeup Compare Logic
 
@@ -242,6 +250,8 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   val high_priority = slot_uop.is_br || slot_uop.is_jal || slot_uop.is_jalr
   io.request_hp := io.request && high_priority
 
+
+
   when (state === s_valid_1) {
     io.request := p1 && p2 && p3 && ppred && !io.kill
   } .elsewhen (state === s_valid_2) {
@@ -253,6 +263,9 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   //assign outputs
   io.valid := is_valid
   io.uop := slot_uop
+  when(io.request && slot_uop.issue_ready === 0.U){
+     io.uop.issue_ready := cycle
+  }
   io.uop.iw_p1_poisoned := p1_poisoned
   io.uop.iw_p2_poisoned := p2_poisoned
 
@@ -262,6 +275,9 @@ class IssueSlot(val numWakeupPorts: Int)(implicit p: Parameters)
   io.will_be_valid := is_valid && !(may_vacate && !squash_grant)
 
   io.out_uop            := slot_uop
+  when(io.request && slot_uop.issue_ready === 0.U){
+    io.out_uop.issue_ready := cycle
+  }
   io.out_uop.iw_state   := next_state
   io.out_uop.uopc       := next_uopc
   io.out_uop.lrs1_rtype := next_lrs1_rtype

@@ -63,6 +63,7 @@ class ICacheResp(val outer: ICache) extends Bundle
   val hit = Bool()
   val miss = Bool()
   val ae = Bool()
+  val resp_cycle = UInt(64.W)
 }
 
 /**
@@ -82,6 +83,8 @@ class ICacheBundle(val outer: ICache) extends BoomBundle()(outer.p)
 
   val resp = Valid(new ICacheResp(outer))
   val invalidate = Input(Bool())
+  val cpu_cycle = Input(UInt())
+  val tsc_reg = Input(UInt())
 
   val perf = Output(new Bundle {
     val acquire = Bool()
@@ -127,9 +130,12 @@ class ICacheModule(outer: ICache) extends LazyModuleImp(outer)
   val refillsToOneBank = (2*tl_out.d.bits.data.getWidth == wordBits)
 
 
+  val cycle = if (DEBUG_CPU_CYCLE) io.cpu_cycle else io.tsc_reg
 
   val s0_valid = io.req.fire
   val s0_vaddr = io.req.bits.addr
+
+
 
   val s1_valid = RegNext(s0_valid)
   val s1_tag_hit = Wire(Vec(nWays, Bool()))
@@ -329,15 +335,10 @@ class ICacheModule(outer: ICache) extends LazyModuleImp(outer)
   io.resp.bits.miss := s2_miss
   io.resp.valid := s2_valid
 
-  if (DEBUG_PRINTF) {
-    val s1_vaddr = RegNext(s0_vaddr)
-    val s2_vaddr = RegNext(s1_vaddr)
-    val debug_tsc_reg = RegInit(0.U(xLen.W))
-    debug_tsc_reg := debug_tsc_reg + 1.U
-    when(s2_valid && s2_miss) {
-      printf("%d | [ICACHE] | icache_miss | 0x%x\n", debug_tsc_reg, s2_vaddr);
-    }
+  when(s2_valid && s2_hit){
+    io.resp.bits.resp_cycle := cycle
   }
+  
 
 
   tl_out.a.valid := s2_miss && !refill_valid && !io.s2_kill

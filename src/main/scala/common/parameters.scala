@@ -297,6 +297,7 @@ trait HasBoomCoreParameters extends freechips.rocketchip.tile.HasCoreParameters
   val MEMTRACE_PRINTF     = boomParams.enableMemtracePrintf // dump trace of memory accesses to L1D for debugging
 
   val DEBUG_PRINTF        = boomParams.enableDebugPrintf
+  val DEBUG_CPU_CYCLE     = boomParams.enableDebugPrintf
 
   //************************************
   // Other Non/Should-not-be sythesizable modules

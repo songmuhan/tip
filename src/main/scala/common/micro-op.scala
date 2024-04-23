@@ -42,6 +42,34 @@ class MicroOp(implicit p: Parameters) extends BoomBundle
   val fu_code          = UInt(FUConstants.FUC_SZ.W) // which functional unit do we use?
   val ctrl             = new CtrlSignals
 
+  val icache_req = UInt(64.W) /* time to fire fetching I-cache */
+  val icache_resp = UInt(64.W) /* time to get cache response */
+
+  val fetch = UInt(64.W)
+
+  val dec_fire = UInt(64.W)
+
+  val ren_ready = UInt(64.W)
+  val ren_fire = UInt(64.W)
+
+  val dis_rob_ready = UInt(64.W)
+  val dis_lsq_ready = UInt(64.W)
+  val dis_fire = UInt(64.W) /* actual time to dispatch */
+
+  val issue_ready = UInt(64.W) /* time to issue, maybe stalled by insufficient issue port (function unit) */
+  val issue_fire = UInt(64.W) /* actual issue time */
+
+  val mem_req = UInt(64.W)
+  val mem_resp = UInt(64.W)
+
+
+  val finish = UInt(64.W)
+  val commit = UInt(64.W)
+
+  val addr = UInt(coreMaxAddrBits.W)
+
+
+
   // What is the next state of this uop in the issue window? useful
   // for the compacting queue.
   val iw_state         = UInt(2.W)

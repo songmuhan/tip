@@ -105,12 +105,15 @@ class RobIo(
   // Stall Decode as appropriate
   val empty = Output(Bool())
   val ready = Output(Bool()) // ROB is busy unrolling rename state...
+  /* DEG:: rob is full */
+  val full = Output(Bool()) 
 
   // Stall the frontend if we know we will redirect the PC
   val flush_frontend = Output(Bool())
 
 
   val debug_tsc = Input(UInt(xLen.W))
+  val cpu_cycle = Input(UInt(xLen.W))
 }
 
 /**
@@ -262,6 +265,8 @@ class Rob(
   val r_xcpt_badvaddr  = Reg(UInt(coreMaxAddrBits.W))
   io.flush_frontend := r_xcpt_val
 
+  val cycle = if (DEBUG_CPU_CYCLE) io.cpu_cycle else io.debug_tsc
+
   //--------------------------------------------------
   // Utility
 
@@ -273,6 +278,9 @@ class Rob(
     if(coreWidth == 1) { return 0.U }
     else           { return rob_idx(log2Ceil(coreWidth)-1, 0).asUInt }
   }
+
+  def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
+  def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
 
   // **************************************************************************
   // Debug
@@ -332,16 +340,14 @@ class Rob(
       rob_exception(rob_tail) := io.enq_uops(w).exception
       rob_predicated(rob_tail)   := false.B
       rob_fflags(w)(rob_tail)    := 0.U
-
-      if (DEBUG_PRINTF) {
-        def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
-        def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-        printf("%d |    [ROB] | dispatch    | 0x%x DASM(0x%x)\n",
-          io.debug_tsc,
-          pcFromUOp(io.enq_uops(w)),
-          instrFromUOp(io.enq_uops(w))
-        )
-      }
+      // if (DEBUG_PRINTF) {
+      //   printf("%d | [rob] | dispatch | tail %d |0x%x DASM(0x%x)\n",
+      //     cycle,
+      //     rob_tail,
+      //     pcFromUOp(io.enq_uops(w)),
+      //     instrFromUOp(io.enq_uops(w))
+      //   )
+      // }
 
       assert (rob_val(rob_tail) === false.B, "[rob] overwriting a valid entry.")
       assert ((io.enq_uops(w).rob_idx >> log2Ceil(coreWidth)) === rob_tail)
@@ -360,21 +366,30 @@ class Rob(
         rob_bsy(row_idx)      := false.B
         rob_unsafe(row_idx)   := false.B
         rob_predicated(row_idx)  := wb_resp.bits.predicated
-        if (DEBUG_PRINTF) {
-          def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0),  uop.debug_inst)
-          def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-          printf("%d |    [ROB] | write_back  | 0x%x DASM(0x%x)\n",
-            io.debug_tsc,
-            pcFromUOp(wb_uop),
-            instrFromUOp(wb_uop),
-          )
-        }
+        rob_uop(row_idx).finish := cycle
+        rob_uop(row_idx).addr := wb_resp.bits.uop.addr
+        rob_uop(row_idx).issue_ready := wb_resp.bits.uop.issue_ready
+        rob_uop(row_idx).issue_fire := wb_resp.bits.uop.issue_fire
+
+        // if (DEBUG_PRINTF) {
+        //     printf("%d | [rob] | wb | iss |%d %d | @ %x | 0x%x DASM(0x%x)\n",
+        //       cycle,
+        //       wb_resp.bits.uop.issue_ready,
+        //       wb_resp.bits.uop.issue_fire,
+        //       wb_resp.bits.uop.addr,
+        //       pcFromUOp(wb_uop),
+        //       instrFromUOp(wb_uop),
+        //     )
+        // }
+
 
         // LSU gives us miss information of the loads, stores are handled separately
         when (wb_resp.bits.uop.uses_ldq) {
           rob_uop(row_idx).tea_psv.dcache_miss := wb_uop.tea_psv.dcache_miss
           rob_uop(row_idx).tea_psv.dtlb_pmiss := wb_uop.tea_psv.dtlb_pmiss
           rob_uop(row_idx).tea_psv.dtlb_smiss := wb_uop.tea_psv.dtlb_smiss
+          rob_uop(row_idx).mem_req := wb_resp.bits.uop.mem_req
+          rob_uop(row_idx).mem_resp := wb_resp.bits.uop.mem_resp
         }
         rob_uop(row_idx).memory_latency.foreach(_ := wb_uop.memory_latency.getOrElse(0.U))
       }
@@ -398,16 +413,21 @@ class Rob(
         rob_uop(cidx).tea_psv.dcache_miss := false.B
         rob_uop(cidx).tea_psv.dtlb_pmiss := clr_rob_psv.dtlb_pmiss
         rob_uop(cidx).tea_psv.dtlb_smiss := clr_rob_psv.dtlb_smiss
-
-        if (DEBUG_PRINTF) {
-          def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
-          def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits-1,0)
-          printf("%d |    [ROB] | clr_bsy     | 0x%x DASM(0x%x)\n",
-            io.debug_tsc,
-            pcFromUOp(rob_uop(cidx)),
-            instrFromUOp(rob_uop(cidx)),
-          )
-        }
+        rob_uop(cidx).finish := cycle
+        rob_uop(cidx).addr := clr_rob_psv.addr
+        rob_uop(cidx).mem_req := cycle
+        rob_uop(cidx).mem_resp := cycle
+        rob_uop(cidx).issue_ready := clr_rob_psv.issue_ready
+        rob_uop(cidx).issue_fire := clr_rob_psv.issue_fire
+        // if (DEBUG_PRINTF) {
+        //   printf("%d | [rob] | store |%d %d |  0x%x DASM(0x%x)\n",
+        //     cycle,
+        //     rob_uop(cidx).issue_ready,
+        //     rob_uop(cidx).issue_fire,
+        //     pcFromUOp(rob_uop(cidx)),
+        //     instrFromUOp(rob_uop(cidx)),
+        //   )
+        // }
 
       }
     }
@@ -456,7 +476,11 @@ class Rob(
     io.commit.uops(w)   := rob_uop(com_idx)
     io.commit.debug_insts(w) := rob_debug_inst_rdata(w)
     io.commit.instr_valids(w) := rob_val(com_idx)
-
+    /* record commit cycle */
+    when (io.commit.arch_valids(w)){
+      io.commit.uops(w).commit := cycle
+    }   
+  
     // We unbusy branches in b1, but its easier to mark the taken/provider src in b2,
     // when the branch might be committing
     when (io.brupdate.b2.mispredict &&
@@ -465,7 +489,9 @@ class Rob(
       io.commit.uops(w).debug_fsrc := BSRC_C
       io.commit.uops(w).taken      := io.brupdate.b2.taken
       io.commit.uops(w).tea_psv.branch_miss := true.B
-    }
+      /* for branch instruction, wb means the branch is detected to be wrong*/
+      io.commit.uops(w).finish := cycle
+      }
 
 
     // Don't attempt to rollback the tail's row when the rob is full.
@@ -841,6 +867,7 @@ class Rob(
   io.rob_pnr_idx  := rob_pnr_idx
   io.empty        := empty
   io.ready        := (rob_state === s_normal) && !full && !r_xcpt_val
+  io.full         := full  
 
   //-----------------------------------------------
   //-----------------------------------------------
