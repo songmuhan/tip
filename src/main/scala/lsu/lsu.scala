@@ -937,6 +937,12 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
             //     instrFromUOp(ldq(uop.ldq_idx).bits.uop)
             //   )
             // }
+            printf("%d | [load] | dmem_req |0x%x DASM(0x%x)\n",
+                   cycle,
+                  //  ldq(uop.ldq_idx).bits.uop.addr,
+                   pcFromUOp(uop),
+                   instrFromUOp(uop),
+                   )
         }
         when(uop.uses_stq && stq(uop.stq_idx).bits.uop.mem_req === 0.U){
           stq(uop.stq_idx).bits.uop.mem_req := cycle
@@ -1542,6 +1548,22 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
     //     }
     //   }
     // }
+
+    when(io.dmem.resp(w).valid) {
+      val uop = io.dmem.resp(w).bits.uop
+      val ldq_idx = io.dmem.resp(w).bits.uop.ldq_idx
+      when(uop.uses_ldq){
+        printf("%d | [load]| dmem_resp |0x%x DASM(0x%x)\n",
+          cycle,
+          // ldq(ldq_idx).bits.uop.addr,
+          // uop.addr,
+          pcFromUOp(uop),
+          instrFromUOp(uop)
+        )
+      }
+    }
+
+
 
     // Handle the response
     when (io.dmem.resp(w).valid)

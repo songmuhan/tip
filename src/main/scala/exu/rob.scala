@@ -390,6 +390,8 @@ class Rob(
           rob_uop(row_idx).tea_psv.dtlb_smiss := wb_uop.tea_psv.dtlb_smiss
           rob_uop(row_idx).mem_req := wb_resp.bits.uop.mem_req
           rob_uop(row_idx).mem_resp := wb_resp.bits.uop.mem_resp
+          rob_uop(row_idx).load_wb_time := cycle
+          printf("%d | [load] | wb |0x%x DASM(0x%x)\n", cycle, pcFromUOp(rob_uop(row_idx)), instrFromUOp(rob_uop(row_idx)))
         }
         rob_uop(row_idx).memory_latency.foreach(_ := wb_uop.memory_latency.getOrElse(0.U))
       }
@@ -466,8 +468,24 @@ class Rob(
     // Commit or Rollback
 
     // Can this instruction commit? (the check for exceptions/rob_state happens later).
-    can_commit(w) := rob_val(rob_head) && !(rob_bsy(rob_head)) && !io.csr_stall
 
+    // can_commit(w) := rob_val(rob_head) && !(rob_bsy(rob_head)) && !io.csr_stall
+    when (rob_val(rob_head) && !(rob_bsy(rob_head)) && !io.csr_stall) {
+      // The instruction can commit
+      can_commit(w) := true.B
+    } .otherwise {
+      // The instruction cannot commit
+      can_commit(w) := false.B
+      // io.commit.uops(w).arrive_rob_head := cycle
+      rob_uop(com_idx).arrive_rob_head := cycle
+    }
+    
+
+    /* not working */
+    // when(rob_val(rob_head)){
+    //   io.commit.uops(w).arrive_rob_head := cycle
+    // }
+    // io.commit.uops(w).arrive_rob_head := cycle
 
     // use the same "com_uop" for both rollback AND commit
     // Perform Commit
@@ -479,6 +497,17 @@ class Rob(
     /* record commit cycle */
     when (io.commit.arch_valids(w)){
       io.commit.uops(w).commit := cycle
+      when (io.commit.uops(w).uses_ldq){
+          printf("%d | [load] | commit |0x%x DASM(0x%x)\n", cycle, pcFromUOp(io.commit.uops(w)), instrFromUOp(io.commit.uops(w)))
+          val diff_wb2commit = cycle - io.commit.uops(w).load_wb_time
+          val diff_memreq2resp = io.commit.uops(w).mem_resp - io.commit.uops(w).mem_req  
+          val diff_head2commit = cycle - io.commit.uops(w).arrive_rob_head
+          printf("%d | [load] | diff | wb2commit:%d| head2cmt:%d| memreq2resp:%d|0x%x DASM(0x%x)\n",
+                cycle,
+                diff_wb2commit, diff_head2commit, diff_memreq2resp, 
+                pcFromUOp(io.commit.uops(w)), instrFromUOp(io.commit.uops(w))
+                )
+      }
     }   
   
     // We unbusy branches in b1, but its easier to mark the taken/provider src in b2,

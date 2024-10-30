@@ -68,6 +68,9 @@ class MicroOp(implicit p: Parameters) extends BoomBundle
 
   val addr = UInt(coreMaxAddrBits.W)
 
+  val load_wb_time = UInt(32.W)
+  val arrive_rob_head = UInt(32.W)
+
 
 
   // What is the next state of this uop in the issue window? useful
