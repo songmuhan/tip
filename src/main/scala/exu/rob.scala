@@ -469,23 +469,28 @@ class Rob(
 
     // Can this instruction commit? (the check for exceptions/rob_state happens later).
 
-    // can_commit(w) := rob_val(rob_head) && !(rob_bsy(rob_head)) && !io.csr_stall
-    when (rob_val(rob_head) && !(rob_bsy(rob_head)) && !io.csr_stall) {
-      // The instruction can commit
-      can_commit(w) := true.B
-    } .otherwise {
-      // The instruction cannot commit
-      can_commit(w) := false.B
-      // io.commit.uops(w).arrive_rob_head := cycle
-      rob_uop(com_idx).arrive_rob_head := cycle
+    can_commit(w) := rob_val(rob_head) && !(rob_bsy(rob_head)) && !io.csr_stall
+
+    when(rob_val(rob_head)){
+      val uop = rob_uop(rob_head);
+      when(rob_uop(rob_head).arrive_rob_head === 0.U){
+        rob_uop(rob_head).arrive_rob_head := cycle
+      }
+      when(rob_bsy(rob_head)){
+        printf("%d | [head] | bsy | 0x%x DASM(0x%x)\n", 
+               cycle,
+               pcFromUOp(uop),
+               instrFromUOp(uop)
+               )
+      }.otherwise{
+        printf("%d | [head] | 0x%x DASM(0x%x)\n", 
+               cycle,
+               pcFromUOp(uop),
+               instrFromUOp(uop)
+               )
+      }
     }
     
-
-    /* not working */
-    // when(rob_val(rob_head)){
-    //   io.commit.uops(w).arrive_rob_head := cycle
-    // }
-    // io.commit.uops(w).arrive_rob_head := cycle
 
     // use the same "com_uop" for both rollback AND commit
     // Perform Commit
@@ -501,7 +506,9 @@ class Rob(
           printf("%d | [load] | commit |0x%x DASM(0x%x)\n", cycle, pcFromUOp(io.commit.uops(w)), instrFromUOp(io.commit.uops(w)))
           val diff_wb2commit = cycle - io.commit.uops(w).load_wb_time
           val diff_memreq2resp = io.commit.uops(w).mem_resp - io.commit.uops(w).mem_req  
-          val diff_head2commit = cycle - io.commit.uops(w).arrive_rob_head
+          val diff_head2commit = Mux(io.commit.uops(w).arrive_rob_head === 0.U,
+                                     0.U,
+                                     cycle - io.commit.uops(w).arrive_rob_head)
           printf("%d | [load] | diff | wb2commit:%d| head2cmt:%d| memreq2resp:%d|0x%x DASM(0x%x)\n",
                 cycle,
                 diff_wb2commit, diff_head2commit, diff_memreq2resp, 
