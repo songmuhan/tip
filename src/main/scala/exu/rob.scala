@@ -391,7 +391,8 @@ class Rob(
           rob_uop(row_idx).mem_req := wb_resp.bits.uop.mem_req
           rob_uop(row_idx).mem_resp := wb_resp.bits.uop.mem_resp
           rob_uop(row_idx).load_wb_time := cycle
-          printf("%d | [load] | wb |0x%x DASM(0x%x)\n", cycle, pcFromUOp(rob_uop(row_idx)), instrFromUOp(rob_uop(row_idx)))
+          /*TEA:: write back time*/
+          printf("%d | TEA | wb |0x%x DASM(0x%x)\n", cycle, pcFromUOp(rob_uop(row_idx)), instrFromUOp(rob_uop(row_idx)))
         }
         rob_uop(row_idx).memory_latency.foreach(_ := wb_uop.memory_latency.getOrElse(0.U))
       }
@@ -470,20 +471,20 @@ class Rob(
     // Can this instruction commit? (the check for exceptions/rob_state happens later).
 
     can_commit(w) := rob_val(rob_head) && !(rob_bsy(rob_head)) && !io.csr_stall
-
+    /*TEA:: uop at rob head but bsy */
     when(rob_val(rob_head)){
       val uop = rob_uop(rob_head);
       when(rob_uop(rob_head).arrive_rob_head === 0.U){
         rob_uop(rob_head).arrive_rob_head := cycle
       }
       when(rob_bsy(rob_head)){
-        printf("%d | [head] | bsy | 0x%x DASM(0x%x)\n", 
+        printf("%d | TEA | bsy | 0x%x DASM(0x%x)\n", 
                cycle,
                pcFromUOp(uop),
                instrFromUOp(uop)
                )
       }.otherwise{
-        printf("%d | [head] | 0x%x DASM(0x%x)\n", 
+        printf("%d | TEA | 0x%x DASM(0x%x)\n", 
                cycle,
                pcFromUOp(uop),
                instrFromUOp(uop)
@@ -503,13 +504,14 @@ class Rob(
     when (io.commit.arch_valids(w)){
       io.commit.uops(w).commit := cycle
       when (io.commit.uops(w).uses_ldq){
-          printf("%d | [load] | commit |0x%x DASM(0x%x)\n", cycle, pcFromUOp(io.commit.uops(w)), instrFromUOp(io.commit.uops(w)))
+          /*TEA:: diff*/
+          printf("%d | TEA | commit |0x%x DASM(0x%x)\n", cycle, pcFromUOp(io.commit.uops(w)), instrFromUOp(io.commit.uops(w)))
           val diff_wb2commit = cycle - io.commit.uops(w).load_wb_time
           val diff_memreq2resp = io.commit.uops(w).mem_resp - io.commit.uops(w).mem_req  
           val diff_head2commit = Mux(io.commit.uops(w).arrive_rob_head === 0.U,
                                      0.U,
                                      cycle - io.commit.uops(w).arrive_rob_head)
-          printf("%d | [load] | diff | wb2commit:%d| head2cmt:%d| memreq2resp:%d|0x%x DASM(0x%x)\n",
+          printf("%d | TEA | diff | wb2commit:%d| head2cmt:%d| memreq2resp:%d|0x%x DASM(0x%x)\n",
                 cycle,
                 diff_wb2commit, diff_head2commit, diff_memreq2resp, 
                 pcFromUOp(io.commit.uops(w)), instrFromUOp(io.commit.uops(w))
