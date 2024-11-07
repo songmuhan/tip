@@ -790,17 +790,17 @@ class BoomNonBlockingDCacheModule(outer: BoomNonBlockingDCache) extends LazyModu
     mshrs.io.req(w).bits.uop.tea_psv.dcache_miss := true.B
   }
 
-  // if (DEBUG_PRINTF) {
-  //   val debug_tsc_reg = RegInit(0.U(xLen.W))
-  //   debug_tsc_reg := debug_tsc_reg + 1.U
-  //   for (w <- 0 until memWidth) {
-  //     when(mshrs.io.req(w).fire) {
-  //       def instrFromUOp(uop: MicroOp) = if (uop.is_rvc == true.B) uop.debug_inst(15, 0) else uop.debug_inst
-  //       def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits - 1, 0)
-  //       printf("%d | [DCACHE] | dcache_miss | 0x%x @ 0x%x DASM(0x%x)\n", debug_tsc_reg, mshrs.io.req(w).bits.addr, pcFromUOp(mshrs.io.req(w).bits.uop), instrFromUOp(mshrs.io.req(w).bits.uop))
-  //     }
-  //   }
-  // }
+   //if (DEBUG_PRINTF) {
+     val debug_tsc_reg = RegInit(0.U(xLen.W))
+     debug_tsc_reg := debug_tsc_reg + 1.U
+     for (w <- 0 until memWidth) {
+       when(mshrs.io.req(w).fire) {
+         def instrFromUOp(uop: MicroOp) = if (uop.is_rvc == true.B) uop.debug_inst(15, 0) else uop.debug_inst
+         def pcFromUOp(uop: MicroOp): UInt = uop.debug_pc(vaddrBits - 1, 0)
+         printf("%d | [DCACHE] | dcache_miss | 0x%x @ 0x%x DASM(0x%x)\n", debug_tsc_reg, mshrs.io.req(w).bits.addr, pcFromUOp(mshrs.io.req(w).bits.uop), instrFromUOp(mshrs.io.req(w).bits.uop))
+       }
+     }
+   //}
 
   mshrs.io.meta_resp.valid      := !s2_nack_hit(0) || prober.io.mshr_wb_rdy
   mshrs.io.meta_resp.bits       := Mux1H(s2_tag_match_way(0), RegNext(meta(0).io.resp))

@@ -1492,14 +1492,14 @@ class LSU(implicit p: Parameters, edge: TLEdgeOut) extends BoomModule()(p)
   val dmem_resp_fired = WireInit(widthMap(w => false.B))
 
   for (w <- 0 until memWidth) {
-      // if (DEBUG_PRINTF) {
-      //   when(io.dmem.nack(w).valid) {
-      //     printf("%d | [lsu] | dmem_nack   | 0x%x DASM(0x%x)\n",
-      //       cycle,
-      //       pcFromUOp(io.dmem.resp(w).bits.uop),
-      //       instrFromUOp(io.dmem.resp(w).bits.uop)
-      //     )
-      //   }
+      // if (DEBUG_PRINTF) { 
+        when(io.dmem.nack(w).valid) {
+          printf("%d | [lsu] | dmem_nack   | 0x%x DASM(0x%x)\n",
+            cycle,
+            pcFromUOp(io.dmem.resp(w).bits.uop),
+            instrFromUOp(io.dmem.resp(w).bits.uop)
+          )
+        }
       // }
     // Handle nacks
     when (io.dmem.nack(w).valid)
