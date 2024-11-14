@@ -516,6 +516,15 @@ class Rob(
                 diff_wb2commit, diff_head2commit, diff_memreq2resp, 
                 pcFromUOp(io.commit.uops(w)), instrFromUOp(io.commit.uops(w))
                 )
+          printf("%d | mshr |%d,%d|%d|%d|0x%x DASM(0x%x)\n", 
+                cycle, 
+                io.commit.uops(w).mem_req,
+                io.commit.uops(w).mem_resp,
+                diff_head2commit,
+                diff_memreq2resp,
+                pcFromUOp(io.commit.uops(w)), 
+                instrFromUOp(io.commit.uops(w))
+                )
       }
     }   
   
