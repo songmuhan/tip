@@ -1006,7 +1006,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
               // here we want to get the information in tip reg
               val concated = Cat(tip.io.out.sample_valid,
                                 tip.io.out.stalled,
-                                tip.io.out.frontend,
+                                tip.io.out.drained,
                                 tip.io.out.flushes.exception,
                                 tip.io.out.flushes.flush,
                                 tip.io.out.flushes.mispredicted,
@@ -1030,7 +1030,7 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
                 debug_tsc_reg,
                 tip.io.out.sample_valid, 
                 tip.io.out.stalled, 
-                tip.io.out.frontend, 
+                tip.io.out.drained, 
                 tip.io.out.flushes.flush, 
                 tip.io.out.flushes.mispredicted, 
                 tip.io.out.flushes.exception, 
@@ -2233,6 +2233,55 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       // event_counters.io.event_signals(62) := PopCount(com_misp_ret)
       // event_counters.io.event_signals(63) := PopCount(com_misp_jalr_no_ret)
   }
+
+  //-------------------------------------------------------------
+  //-------------------------------------------------------------
+  // **** TIP module ****
+  //-------------------------------------------------------------
+  //-------------------------------------------------------------
+  val tip_uops = tip.io.out.uops
+
+  val tip_targeted_uop = tip.io.out.uops(tip.io.out.oldestId)
+
+  val is_branch_instr = tip_targeted_uop.is_br || tip_targeted_uop.is_jal || tip_targeted_uop.is_jalr
+  val is_store = tip_targeted_uop.uses_stq
+  val is_load = tip_targeted_uop.uses_ldq
+  val is_alu = tip_targeted_uop.fu_code === FU_ALU && !tip_targeted_uop.is_br
+
+  val stalled_state_others = !is_branch_instr && !is_store && !is_load && !is_alu
+
+ when(startCounter){
+    /* tip state counting */
+    event_counters.io.event_signals(42) := Mux(tip.io.out.computing, 1.U, 0.U)
+    event_counters.io.event_signals(43) := Mux(tip.io.out.stalled, 1.U, 0.U)
+    event_counters.io.event_signals(44) := Mux(tip.io.out.drained, 1.U, 0.U)
+    event_counters.io.event_signals(45) := Mux(tip.io.out.flushed, 1.U, 0.U)
+
+    /* stalled instr distribution */
+    event_counters.io.event_signals(46) := Mux(tip.io.out.stalled && is_branch_instr, 1.U, 0.U)
+    event_counters.io.event_signals(47) := Mux(tip.io.out.stalled && is_store, 1.U, 0.U)
+    event_counters.io.event_signals(48) := Mux(tip.io.out.stalled && is_load, 1.U, 0.U)
+    event_counters.io.event_signals(49) := Mux(tip.io.out.stalled && is_alu, 1.U, 0.U)
+    event_counters.io.event_signals(50) := Mux(tip.io.out.stalled && stalled_state_others, 1.U, 0.U)
+
+    /* load miss rate on stalled state */
+    event_counters.io.event_signals(51) := Mux(tip.io.out.stalled && is_load && tip_targeted_uop.tea_psv.dcache_miss, 1.U, 0.U)
+    /* total d cache miss*/
+    val _commit = rob.io.commit
+    val cache_miss_vec = VecInit((0 until coreWidth).map { w =>
+                              _commit.arch_valids(w) && 
+                              _commit.uops(w).uses_ldq && 
+                              _commit.uops(w).tea_psv.dcache_miss
+                               })
+    event_counters.io.event_signals(52) := PopCount(cache_miss_vec.asUInt)
+ }
+
+  
+
+
+
+
+
 
 
   //-------------------------------------------------------------

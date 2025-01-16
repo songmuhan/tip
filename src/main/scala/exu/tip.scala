@@ -6,7 +6,6 @@ import org.chipsalliance.cde.config.Parameters
 import freechips.rocketchip.tile.{TraceBundle}
 import freechips.rocketchip.util.{CoreMonitorBundle}
 import boom.common._
-import boom.ifu.{HasBoomFrontendParameters}
 import boom.exu.FUConstants._
 
 class TipFlushes(implicit p: Parameters) extends BoomBundle {
@@ -30,11 +29,15 @@ class TipReg(implicit p: Parameters) extends BoomBundle {
     val addrs = Vec(retireWidth, UInt(vaddrBits.W))
     val valids = Vec(retireWidth, Bool())
     val oldestId = UInt(log2Ceil(retireWidth).W)
-  
-    val stalled = Bool()
-    val frontend = Bool()
+    val uops = Vec(retireWidth, new MicroOp())
     val flushes = new TipFlushes
     val sample_valid = Bool()
+
+
+    val stalled = Bool()
+    val drained = Bool()
+    val flushed = Bool()
+    val computing = Bool()
 }
 
 class TipIo(implicit p: Parameters) extends BoomBundle {
@@ -54,7 +57,7 @@ class Tip(implicit p: Parameters) extends BoomModule {
     /* out: public registers interact with outside, valid iff out.sample_valid */
     val out = RegInit(WireDefault(0.U.asTypeOf(new TipReg)))
     io.out := out
-
+    out.uops := io.uops
     /* offending instruction register*/
     val ori = RegInit(WireDefault(0.U.asTypeOf(new OIR)))
     /* are we still in drain state, waiting for the first dispatch instruction */
@@ -125,7 +128,7 @@ class Tip(implicit p: Parameters) extends BoomModule {
      *   1. flag-related register should be fronzen                  
      *   2. address-related register can be update normally          
      */
-        assert(out.frontend) 
+        assert(out.drained) 
         when(rob_not_empty) {
             waiting_for_dispatching := false.B
             out.sample_valid := true.B
@@ -140,8 +143,11 @@ class Tip(implicit p: Parameters) extends BoomModule {
             out.valids := io.arch_valids
 
             out.flushes := 0.U.asTypeOf(new TipFlushes)
+
             out.stalled := false.B
-            out.frontend := false.B
+            out.drained := false.B
+            out.computing := true.B
+            out.flushed := false.B
 
             out.sample_valid := true.B
 
@@ -155,9 +161,13 @@ class Tip(implicit p: Parameters) extends BoomModule {
             out.valids := io.instr_valids
             out.oldestId := rob_valid_index
 
-            out.stalled := true.B
             out.flushes := 0.U.asTypeOf(new TipFlushes)
-            out.frontend := false.B
+
+            out.stalled := true.B
+            out.drained := false.B
+            out.computing := false.B
+            out.flushed := false.B
+        
 
             out.sample_valid := true.B
 
@@ -168,15 +178,22 @@ class Tip(implicit p: Parameters) extends BoomModule {
             out.oldestId := 0.U
 
             out.flushes := ori.flushes
+
             out.stalled := false.B
-            out.frontend := false.B
+            out.drained := false.B
+            out.computing := false.B
+            out.flushed := true.B
 
             out.sample_valid := true.B
 
         }.otherwise { // drained
-            out.frontend := true.B
+           
             out.flushes := 0.U.asTypeOf(new TipFlushes)
+        
+            out.drained := true.B
             out.stalled := false.B
+            out.computing := false.B
+            out.flushed := false.B
 
             out.sample_valid := false.B
 
@@ -186,13 +203,17 @@ class Tip(implicit p: Parameters) extends BoomModule {
             out.valids := VecInit(Seq.fill(retireWidth)(false.B))
         }
     }
+    def instrFromUOp(uop: MicroOp): UInt = Mux(uop.is_rvc === true.B, uop.debug_inst(15, 0), uop.debug_inst)
 
-    // printf("%d | V:%b | [ S:%b | D: %b | F: [f:%b|b:%b|e:%b] | Id:%d ", io.cpu_cycle,out.sample_valid, out.stalled, out.frontend, out.flushes.flush, out.flushes.mispredicted, out.flushes.exception, out.oldestId);
-    // for (i <- 0 until coreWidth) {
-    //     printf(" | %b pc:%x", 
-    //         out.valids(i),
-    //         out.addrs(i)
-    //     )
-    // }
-    // printf("\n")
+    printf("TIP %d | V:%b | [ S:%b | D: %b | F: %b | Id:%d ", io.cpu_cycle,out.sample_valid, out.stalled, out.drained, out.flushed, out.oldestId);
+    for (i <- 0 until coreWidth) {
+        printf(" | %b pc:%x \"DASM(0x%x)\"", 
+            out.valids(i),
+            out.addrs(i),
+            instrFromUOp(out.uops(i))
+        )
+    }
+    printf("\n")
+
+
 }
