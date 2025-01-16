@@ -306,6 +306,11 @@ class BoomFrontendIO(implicit p: Parameters) extends BoomBundle
   val bpsrc_f3 = Input(Bool())
   val bpsrc_core = Input(Bool())
 
+  val itlb_not_ready = Input(Bool())
+  val icache_not_ready = Input(Bool())
+  val bp2_clear = Input(Bool())
+  val bp3_clear = Input(Bool())
+
 }
 
 /**
@@ -534,6 +539,9 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
 
   val f2_correct_f1_ghist = s1_ghist =/= f2_predicted_ghist && enableGHistStallRepair.B
 
+  val bp2_clear = WireInit(false.B)
+  bp2_clear := false.B
+
   if (DEBUG_PRINTF) {
     val debug_tsc_reg = RegInit(0.U(xLen.W))
     debug_tsc_reg := debug_tsc_reg + 1.U
@@ -572,7 +580,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
     }
     when ((s1_valid && (s1_vpc =/= f2_predicted_target || f2_correct_f1_ghist)) || !s1_valid) {
       f1_clear := true.B
-
+      bp2_clear := true.B
       s0_valid     := !((s2_tlb_resp.ae.inst || s2_tlb_resp.pf.inst) && !s2_is_replay)
       s0_vpc       := f2_predicted_target
       s0_is_replay := false.B
@@ -910,6 +918,9 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   val f3_correct_f1_ghist = s1_ghist =/= f3_predicted_ghist && enableGHistStallRepair.B
   val f3_correct_f2_ghist = s2_ghist =/= f3_predicted_ghist && enableGHistStallRepair.B
 
+  val bp3_clear = WireInit(false.B)
+  bp3_clear := false.B
+
   when (f3.io.deq.valid && f4_ready) {
     when (f3_fetch_bundle.cfi_is_call && f3_fetch_bundle.cfi_idx.valid) {
       ras.io.write_valid := true.B
@@ -926,6 +937,7 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
           (!s2_valid && !s1_valid)) {
       f2_clear := true.B
       f1_clear := true.B
+      bp3_clear := true.B
 
       s0_valid     := !(f3_fetch_bundle.xcpt_pf_if || f3_fetch_bundle.xcpt_ae_if)
       s0_vpc       := f3_predicted_target
@@ -1098,6 +1110,10 @@ class BoomFrontendModule(outer: BoomFrontend) extends LazyModuleImp(outer)
   ftq.io.debug_ftq_idx := io.cpu.debug_ftq_idx
   io.cpu.debug_fetch_pc := ftq.io.debug_fetch_pc
 
+  io.cpu.itlb_not_ready := !tlb.io.req.ready
+  io.cpu.icache_not_ready := !icache.io.req.ready
+  io.cpu.bp2_clear := bp2_clear
+  io.cpu.bp3_clear := bp3_clear
 
   override def toString: String =
     (BoomCoreStringPrefix("====Overall Frontend Params====") + "\n"

@@ -111,6 +111,8 @@ class RobIo(
 
 
   val debug_tsc = Input(UInt(xLen.W))
+  val misprediction_kill_counts = Output(Vec(coreWidth, UInt(10.W)))
+  val rename_stall = Input(Bool())
 }
 
 /**
@@ -510,12 +512,16 @@ class Rob(
 
     // -----------------------------------------------
     // Kill speculated entries on branch mispredict
+    val bad_speculation_counts = Wire(Vec(numRobRows, Bool()))
     for (i <- 0 until numRobRows) {
       val br_mask = rob_uop(i).br_mask
-
+      bad_speculation_counts(i) := false.B
       //kill instruction if mispredict & br mask match
       when (IsKilledByBranch(io.brupdate, br_mask))
       {
+        when(rob_val(i) === true.B) {
+          bad_speculation_counts(i) := true.B
+        }
         rob_val(i) := false.B
         rob_uop(i.U).debug_inst := BUBBLE
       } .elsewhen (rob_val(i)) {
@@ -524,6 +530,7 @@ class Rob(
       }
     }
 
+    io.misprediction_kill_counts(w) := PopCount(bad_speculation_counts)
 
     // Debug signal to figure out which prediction structure
     // or core resolved a branch correctly

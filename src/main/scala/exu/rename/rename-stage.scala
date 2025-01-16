@@ -86,6 +86,8 @@ abstract class AbstractRenameStage(
 
     val debug_rob_empty = Input(Bool())
     val debug = Output(new DebugRenameStageIO(numPhysRegs))
+
+    val kill_count = Output(UInt(10.W))
   })
 
   def BypassAllocations(uop: MicroOp, older_uops: Seq[MicroOp], alloc_reqs: Seq[Bool]): MicroOp
@@ -114,14 +116,18 @@ abstract class AbstractRenameStage(
     ren1_uops(w)          := io.dec_uops(w)
   }
 
+  val rename_kill = Wire(Vec(plWidth, Bool()))
   for (w <- 0 until plWidth) {
     val r_valid  = RegInit(false.B)
     val r_uop    = Reg(new MicroOp)
     val next_uop = Wire(new MicroOp)
-
+    rename_kill(w) := false.B
     next_uop := r_uop
 
     when (io.kill) {
+      when (r_valid === true.B) {
+        rename_kill(w) := true.B
+      }
       r_valid := false.B
     } .elsewhen (ren2_ready) {
       r_valid := ren1_fire(w)
@@ -136,6 +142,8 @@ abstract class AbstractRenameStage(
     ren2_valids(w) := r_valid
     ren2_uops(w)   := r_uop
   }
+
+  io.kill_count := PopCount(rename_kill)
 
   //-------------------------------------------------------------
   // Outputs

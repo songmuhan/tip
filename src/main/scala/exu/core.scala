@@ -536,38 +536,38 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   val exe_misp_jalrcall  = exe_misp_jalr && (b2.uop.ldst === 1.U)
 
 
-  //commit inst type
-  val com_is_ld   = Wire(Vec(coreWidth, Bool()))
-  val com_is_st   = Wire(Vec(coreWidth, Bool()))
-  val com_is_br   = Wire(Vec(coreWidth, Bool()))
-  val com_is_jalr = Wire(Vec(coreWidth, Bool()))
-  val com_is_ret  = Wire(Vec(coreWidth, Bool()))
-  val com_is_jalrcall  = Wire(Vec(coreWidth, Bool()))
+  // //commit inst type
+  // val com_is_ld   = Wire(Vec(coreWidth, Bool()))
+  // val com_is_st   = Wire(Vec(coreWidth, Bool()))
+  // val com_is_br   = Wire(Vec(coreWidth, Bool()))
+  // val com_is_jalr = Wire(Vec(coreWidth, Bool()))
+  // val com_is_ret  = Wire(Vec(coreWidth, Bool()))
+  // val com_is_jalrcall  = Wire(Vec(coreWidth, Bool()))
 
-  // commit misprediction information
-  val com_misp_br   = Wire(Vec(coreWidth, Bool()))
-  val com_misp_jalr = Wire(Vec(coreWidth, Bool()))
-  val com_misp_ret  = Wire(Vec(coreWidth, Bool()))
-  val com_misp_jalrcall  = Wire(Vec(coreWidth, Bool()))
-  val com_misp_cfi  = Wire(Vec(coreWidth, Bool()))
+  // // commit misprediction information
+  // val com_misp_br   = Wire(Vec(coreWidth, Bool()))
+  // val com_misp_jalr = Wire(Vec(coreWidth, Bool()))
+  // val com_misp_ret  = Wire(Vec(coreWidth, Bool()))
+  // val com_misp_jalrcall  = Wire(Vec(coreWidth, Bool()))
+  // val com_misp_cfi  = Wire(Vec(coreWidth, Bool()))
 
-  for(w <- 0 until coreWidth) {
-    val uop = rob.io.commit.uops(w)
-    val valid = rob.io.commit.arch_valids(w)
-    com_is_ld(w) := valid && uop.uses_ldq 
-    com_is_st(w) := valid && uop.uses_stq 
-    com_is_br(w) := valid && uop.is_br 
-    com_is_jalr(w)  := valid && uop.is_jalr 
-    com_is_ret(w)   := valid && uop.is_jalr && (uop.ldst === 0.U) && (uop.lrs1 === 1.U)                   
-    com_is_jalrcall(w) := valid && uop.is_jalr && (uop.ldst === 1.U)  
+  // for(w <- 0 until coreWidth) {
+  //   val uop = rob.io.commit.uops(w)
+  //   val valid = rob.io.commit.arch_valids(w)
+  //   com_is_ld(w) := valid && uop.uses_ldq 
+  //   com_is_st(w) := valid && uop.uses_stq 
+  //   com_is_br(w) := valid && uop.is_br 
+  //   com_is_jalr(w)  := valid && uop.is_jalr 
+  //   com_is_ret(w)   := valid && uop.is_jalr && (uop.ldst === 0.U) && (uop.lrs1 === 1.U)                   
+  //   com_is_jalrcall(w) := valid && uop.is_jalr && (uop.ldst === 1.U)  
 
-    com_misp_br(w)    := com_is_br(w)   && uop.debug_fsrc === BSRC_C
-    com_misp_jalr(w)  := com_is_jalr(w) && uop.debug_fsrc === BSRC_C 
-    com_misp_ret(w)   := com_is_ret(w)  && uop.debug_fsrc === BSRC_C 
-    com_misp_jalrcall(w) := com_is_jalrcall(w) && uop.debug_fsrc === BSRC_C 
+  //   com_misp_br(w)    := com_is_br(w)   && uop.debug_fsrc === BSRC_C
+  //   com_misp_jalr(w)  := com_is_jalr(w) && uop.debug_fsrc === BSRC_C 
+  //   com_misp_ret(w)   := com_is_ret(w)  && uop.debug_fsrc === BSRC_C 
+  //   com_misp_jalrcall(w) := com_is_jalrcall(w) && uop.debug_fsrc === BSRC_C 
 
-    com_misp_cfi(w) := com_misp_br(w) || com_misp_jalr(w)
-  }
+  //   com_misp_cfi(w) := com_misp_br(w) || com_misp_jalr(w)
+  // }
 
   //exception information
   val misalign_excpt = csr.io.exception && (csr.io.cause === Causes.misaligned_load.U || csr.io.cause === Causes.misaligned_store.U)
@@ -580,7 +580,8 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   when (sampleValid) { //usemode
     switch (sampleEventSel){
       is (0.U)  { nowEventNum := nowEventNum + 1.U } // cycles
-      is (1.U)  { nowEventNum := nowEventNum + PopCount(com_misp_cfi.asUInt) }
+      // is (1.U)  { nowEventNum := nowEventNum + PopCount(com_misp_cfi.asUInt) }
+      is (1.U)  { nowEventNum := nowEventNum + 1.U }
       is (2.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.acquire, 1.U, 0.U) }
       is (3.U)  { nowEventNum := nowEventNum + Mux(io.lsu.perf.tlbMiss, 1.U, 0.U) }
       is (4.U)  { nowEventNum := nowEventNum + RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) } // instruction
@@ -593,79 +594,79 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     event_counters.io.event_signals(w) := 0.U
   }
 
-  when (startCounter) {
-    event_counters.io.event_signals(0) :=   1.U  //cycles
-    event_counters.io.event_signals(1) :=  RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) // commit inst
-    event_counters.io.event_signals(2) :=  Mux(io.ifu.icache_valid_access, 1.U, 0.U) //i-cache valid access number
-    event_counters.io.event_signals(3) :=  Mux(io.ifu.icache_hit, 1.U, 0.U)  //icache hit number
-    event_counters.io.event_signals(4) :=  Mux(io.ifu.perf.acquire, 1.U, 0.U) //i-cache send req to next level cache
-    event_counters.io.event_signals(5) :=  Mux(io.ifu.itlb_valid_access, 1.U, 0.U) //itlb valid access number
-    event_counters.io.event_signals(6) :=  Mux(io.ifu.itlb_hit, 1.U, 0.U) //itlb hit number
-    event_counters.io.event_signals(7) :=  Mux(io.ifu.perf.tlbMiss, 1.U, 0.U) //i-tlb start ptw
-    event_counters.io.event_signals(8) :=  Mux(io.ifu.bpsrc_f1, 1.U, 0.U) // npc use f1
-    event_counters.io.event_signals(9) :=  Mux(io.ifu.bpsrc_f2, 1.U, 0.U) // npc use f2
-    event_counters.io.event_signals(10) :=  Mux(io.ifu.bpsrc_f3, 1.U, 0.U) // npc use f3
-    event_counters.io.event_signals(11) :=  Mux(io.ifu.bpsrc_core, 1.U, 0.U) // npc use core information
+  // when (startCounter) {
+  //   event_counters.io.event_signals(0) :=   1.U  //cycles
+  //   event_counters.io.event_signals(1) :=  RegNext(PopCount(rob.io.commit.arch_valids.asUInt)) // commit inst
+  //   event_counters.io.event_signals(2) :=  Mux(io.ifu.icache_valid_access, 1.U, 0.U) //i-cache valid access number
+  //   event_counters.io.event_signals(3) :=  Mux(io.ifu.icache_hit, 1.U, 0.U)  //icache hit number
+  //   event_counters.io.event_signals(4) :=  Mux(io.ifu.perf.acquire, 1.U, 0.U) //i-cache send req to next level cache
+  //   event_counters.io.event_signals(5) :=  Mux(io.ifu.itlb_valid_access, 1.U, 0.U) //itlb valid access number
+  //   event_counters.io.event_signals(6) :=  Mux(io.ifu.itlb_hit, 1.U, 0.U) //itlb hit number
+  //   event_counters.io.event_signals(7) :=  Mux(io.ifu.perf.tlbMiss, 1.U, 0.U) //i-tlb start ptw
+  //   event_counters.io.event_signals(8) :=  Mux(io.ifu.bpsrc_f1, 1.U, 0.U) // npc use f1
+  //   event_counters.io.event_signals(9) :=  Mux(io.ifu.bpsrc_f2, 1.U, 0.U) // npc use f2
+  //   event_counters.io.event_signals(10) :=  Mux(io.ifu.bpsrc_f3, 1.U, 0.U) // npc use f3
+  //   event_counters.io.event_signals(11) :=  Mux(io.ifu.bpsrc_core, 1.U, 0.U) // npc use core information
 
-    event_counters.io.event_signals(12) :=  Mux(fb_out_zero, 1.U, 0.U)  //fetch buffer output no valid inst
-    event_counters.io.event_signals(13) :=  Mux(fb_out_full, 1.U, 0.U)  //fb output has corewidth valid inst
-    event_counters.io.event_signals(14) :=  Mux(fb_out_notFull, 1.U, 0.U) //fbout has valid inst but not full
+  //   event_counters.io.event_signals(12) :=  Mux(fb_out_zero, 1.U, 0.U)  //fetch buffer output no valid inst
+  //   event_counters.io.event_signals(13) :=  Mux(fb_out_full, 1.U, 0.U)  //fb output has corewidth valid inst
+  //   event_counters.io.event_signals(14) :=  Mux(fb_out_notFull, 1.U, 0.U) //fbout has valid inst but not full
 
-    event_counters.io.event_signals(15) :=  Mux(dec_out_zero, 1.U, 0.U)  //decode output no valid inst
-    event_counters.io.event_signals(16) :=  Mux(dec_out_full, 1.U, 0.U)  //decode output has corewidth valid inst
-    event_counters.io.event_signals(17) :=  Mux(dec_out_notFull, 1.U, 0.U) //decode out has valid inst but not full
-    event_counters.io.event_signals(18) :=  Mux(dec_brmask_logic.io.is_full.reduce(_||_), 1.U, 0.U) //brmask full cycles
-    event_counters.io.event_signals(19) :=  PopCount(ren_stalls.asUInt)  //rename stall number
+  //   event_counters.io.event_signals(15) :=  Mux(dec_out_zero, 1.U, 0.U)  //decode output no valid inst
+  //   event_counters.io.event_signals(16) :=  Mux(dec_out_full, 1.U, 0.U)  //decode output has corewidth valid inst
+  //   event_counters.io.event_signals(17) :=  Mux(dec_out_notFull, 1.U, 0.U) //decode out has valid inst but not full
+  //   event_counters.io.event_signals(18) :=  Mux(dec_brmask_logic.io.is_full.reduce(_||_), 1.U, 0.U) //brmask full cycles
+  //   event_counters.io.event_signals(19) :=  PopCount(ren_stalls.asUInt)  //rename stall number
 
-    event_counters.io.event_signals(20) :=  Mux(dis_out_zero, 1.U, 0.U)  //dispatch output no valid inst
-    event_counters.io.event_signals(21) :=  Mux(dis_out_full, 1.U, 0.U)  //dispatch output has corewidth valid inst
-    event_counters.io.event_signals(22) :=  Mux(dis_out_notFull, 1.U, 0.U) //dispatch out has valid inst but not full
-    event_counters.io.event_signals(23) :=  PopCount(ldq_dis_stall.asUInt)  //ldq dispatch stall times
-    event_counters.io.event_signals(24) :=  PopCount(stq_dis_stall.asUInt)  //stq dispatch stall times
-    event_counters.io.event_signals(25) :=  Mux(rob_dis_stall, 1.U, 0.U)  //rob stall dispatch cycles
+  //   event_counters.io.event_signals(20) :=  Mux(dis_out_zero, 1.U, 0.U)  //dispatch output no valid inst
+  //   event_counters.io.event_signals(21) :=  Mux(dis_out_full, 1.U, 0.U)  //dispatch output has corewidth valid inst
+  //   event_counters.io.event_signals(22) :=  Mux(dis_out_notFull, 1.U, 0.U) //dispatch out has valid inst but not full
+  //   event_counters.io.event_signals(23) :=  PopCount(ldq_dis_stall.asUInt)  //ldq dispatch stall times
+  //   event_counters.io.event_signals(24) :=  PopCount(stq_dis_stall.asUInt)  //stq dispatch stall times
+  //   event_counters.io.event_signals(25) :=  Mux(rob_dis_stall, 1.U, 0.U)  //rob stall dispatch cycles
 
-    event_counters.io.event_signals(26) :=  PopCount(iss_valids.asUInt)  //issue int uop number
-    event_counters.io.event_signals(27) :=  Mux(iss_val_zero, 1.U, 0.U)  //issue output no valid inst
-    event_counters.io.event_signals(28) :=  Mux(iss_val_full, 1.U, 0.U)  //issue output has corewidth valid inst
-    event_counters.io.event_signals(29) :=  Mux(iss_val_notFull, 1.U, 0.U) //issue out has valid inst but not full
-    event_counters.io.event_signals(30) :=  PopCount(spec_miss_issuop.asUInt)  //valid mis-wakeup issue uop number
+  //   event_counters.io.event_signals(26) :=  PopCount(iss_valids.asUInt)  //issue int uop number
+  //   event_counters.io.event_signals(27) :=  Mux(iss_val_zero, 1.U, 0.U)  //issue output no valid inst
+  //   event_counters.io.event_signals(28) :=  Mux(iss_val_full, 1.U, 0.U)  //issue output has corewidth valid inst
+  //   event_counters.io.event_signals(29) :=  Mux(iss_val_notFull, 1.U, 0.U) //issue out has valid inst but not full
+  //   event_counters.io.event_signals(30) :=  PopCount(spec_miss_issuop.asUInt)  //valid mis-wakeup issue uop number
 
-    event_counters.io.event_signals(31) :=  PopCount(exe_is_ld.asUInt)       //execute ld number
-    event_counters.io.event_signals(32) :=  PopCount(exe_is_st.asUInt)       //execute st number
-    event_counters.io.event_signals(33) :=  io.lsu.dtlb_valid_access            //valid dtlb req number
-    event_counters.io.event_signals(34) :=  io.lsu.dtlb_miss_num              //dtlb miss number
-    event_counters.io.event_signals(35) :=  Mux(io.lsu.perf.tlbMiss, 1.U, 0.U)  //d-tlb miss
-    event_counters.io.event_signals(36) :=  io.lsu.dcache_valid_access   //valid dcache access number
-    event_counters.io.event_signals(37) :=  io.lsu.dcache_nack_num   //d-cache load & store nack number
-    event_counters.io.event_signals(38) :=  Mux(io.lsu.perf.acquire, 1.U, 0.U) //dcache send req to next level number
+  //   event_counters.io.event_signals(31) :=  PopCount(exe_is_ld.asUInt)       //execute ld number
+  //   event_counters.io.event_signals(32) :=  PopCount(exe_is_st.asUInt)       //execute st number
+  //   event_counters.io.event_signals(33) :=  io.lsu.dtlb_valid_access            //valid dtlb req number
+  //   event_counters.io.event_signals(34) :=  io.lsu.dtlb_miss_num              //dtlb miss number
+  //   event_counters.io.event_signals(35) :=  Mux(io.lsu.perf.tlbMiss, 1.U, 0.U)  //d-tlb miss
+  //   event_counters.io.event_signals(36) :=  io.lsu.dcache_valid_access   //valid dcache access number
+  //   event_counters.io.event_signals(37) :=  io.lsu.dcache_nack_num   //d-cache load & store nack number
+  //   event_counters.io.event_signals(38) :=  Mux(io.lsu.perf.acquire, 1.U, 0.U) //dcache send req to next level number
 
-    event_counters.io.event_signals(39) :=  PopCount(exe_is_br.asUInt)       //execute br number
-    event_counters.io.event_signals(40) :=  PopCount(exe_is_jalr.asUInt)   //execute jalr number
-    event_counters.io.event_signals(41) :=  PopCount(exe_is_ret.asUInt)     //execute jalr-ret number
-    event_counters.io.event_signals(42) :=  PopCount(exe_is_jalrcall.asUInt)  //execute jalr-call number
-    event_counters.io.event_signals(43) :=  Mux(exe_misp_br, 1.U, 0.U)       //exe misp br number
-    event_counters.io.event_signals(44) :=  Mux(exe_misp_jalr, 1.U, 0.U)   //exe misp jalr number
-    event_counters.io.event_signals(45) :=  Mux(exe_misp_ret, 1.U, 0.U)     //exe misp jalr-ret number
-    event_counters.io.event_signals(46) :=  Mux(exe_misp_jalrcall, 1.U, 0.U)  //exe misp jalr-call number
+  //   event_counters.io.event_signals(39) :=  PopCount(exe_is_br.asUInt)       //execute br number
+  //   event_counters.io.event_signals(40) :=  PopCount(exe_is_jalr.asUInt)   //execute jalr number
+  //   event_counters.io.event_signals(41) :=  PopCount(exe_is_ret.asUInt)     //execute jalr-ret number
+  //   event_counters.io.event_signals(42) :=  PopCount(exe_is_jalrcall.asUInt)  //execute jalr-call number
+  //   event_counters.io.event_signals(43) :=  Mux(exe_misp_br, 1.U, 0.U)       //exe misp br number
+  //   event_counters.io.event_signals(44) :=  Mux(exe_misp_jalr, 1.U, 0.U)   //exe misp jalr number
+  //   event_counters.io.event_signals(45) :=  Mux(exe_misp_ret, 1.U, 0.U)     //exe misp jalr-ret number
+  //   event_counters.io.event_signals(46) :=  Mux(exe_misp_jalrcall, 1.U, 0.U)  //exe misp jalr-call number
 
-    event_counters.io.event_signals(47) :=  PopCount(com_is_ld.asUInt)       //commit ld number
-    event_counters.io.event_signals(48) :=  PopCount(com_is_st.asUInt)       //commit st number
-    event_counters.io.event_signals(49) :=  PopCount(com_is_br.asUInt)       //commit br number
-    event_counters.io.event_signals(50) :=  PopCount(com_is_jalr.asUInt)   //commit jalr number
-    event_counters.io.event_signals(51) :=  PopCount(com_is_ret.asUInt)     //commit jalr-ret number
-    event_counters.io.event_signals(52) :=  PopCount(com_is_jalrcall.asUInt)  //commit jalr-call number
-    event_counters.io.event_signals(53) :=  PopCount(com_misp_br.asUInt)       //com misp br number
-    event_counters.io.event_signals(54) :=  PopCount(com_misp_jalr.asUInt)   //com misp jalr number
-    event_counters.io.event_signals(55) :=  PopCount(com_misp_ret.asUInt)     //com misp jalr-ret number
-    event_counters.io.event_signals(56) :=  PopCount(com_misp_jalrcall.asUInt)  //com misp jalr-call number
+  //   event_counters.io.event_signals(47) :=  PopCount(com_is_ld.asUInt)       //commit ld number
+  //   event_counters.io.event_signals(48) :=  PopCount(com_is_st.asUInt)       //commit st number
+  //   event_counters.io.event_signals(49) :=  PopCount(com_is_br.asUInt)       //commit br number
+  //   event_counters.io.event_signals(50) :=  PopCount(com_is_jalr.asUInt)   //commit jalr number
+  //   event_counters.io.event_signals(51) :=  PopCount(com_is_ret.asUInt)     //commit jalr-ret number
+  //   event_counters.io.event_signals(52) :=  PopCount(com_is_jalrcall.asUInt)  //commit jalr-call number
+  //   event_counters.io.event_signals(53) :=  PopCount(com_misp_br.asUInt)       //com misp br number
+  //   event_counters.io.event_signals(54) :=  PopCount(com_misp_jalr.asUInt)   //com misp jalr number
+  //   event_counters.io.event_signals(55) :=  PopCount(com_misp_ret.asUInt)     //com misp jalr-ret number
+  //   event_counters.io.event_signals(56) :=  PopCount(com_misp_jalrcall.asUInt)  //com misp jalr-call number
 
-    event_counters.io.event_signals(57) :=  Mux(io.ptw.perf.l2miss, 1.U, 0.U) //L2 TLB miss
-    event_counters.io.event_signals(58) :=  Mux(misalign_excpt, 1.U, 0.U)  //misalign_excpt
-    event_counters.io.event_signals(59) :=  Mux(lstd_pagefault, 1.U, 0.U)  //lstd_pagefault
-    event_counters.io.event_signals(60) :=  Mux(fetch_pagefault, 1.U, 0.U)  //fetch_pagefault
-    event_counters.io.event_signals(61) :=  Mux(mini_exception, 1.U, 0.U)  //mini_exception
-    event_counters.io.event_signals(62) :=  Mux(rob.io.commit.rollback, 1.U, 0.U)  //rollback_cycles
-  }
+  //   event_counters.io.event_signals(57) :=  Mux(io.ptw.perf.l2miss, 1.U, 0.U) //L2 TLB miss
+  //   event_counters.io.event_signals(58) :=  Mux(misalign_excpt, 1.U, 0.U)  //misalign_excpt
+  //   event_counters.io.event_signals(59) :=  Mux(lstd_pagefault, 1.U, 0.U)  //lstd_pagefault
+  //   event_counters.io.event_signals(60) :=  Mux(fetch_pagefault, 1.U, 0.U)  //fetch_pagefault
+  //   event_counters.io.event_signals(61) :=  Mux(mini_exception, 1.U, 0.U)  //mini_exception
+  //   event_counters.io.event_signals(62) :=  Mux(rob.io.commit.rollback, 1.U, 0.U)  //rollback_cycles
+  // }
 
   //topdown
   //-- first level
@@ -704,17 +705,17 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     iss_int_uops(w) := iss_valids(w) && !(io.lsu.ld_miss && (iss_uops(w).iw_p1_poisoned || iss_uops(w).iw_p2_poisoned))
   }
 
-  when (startCounter) {
-    //idq_uops_not_delivered.core
-    event_counters.io.event_signals(63) := PopCount(dec_uops_not_delivered.asUInt)   
+  // when (startCounter) {
+  //   //idq_uops_not_delivered.core
+  //   event_counters.io.event_signals(63) := PopCount(dec_uops_not_delivered.asUInt)   
 
-    //uops_issued.any
-    event_counters.io.event_signals(64) := PopCount(iss_int_uops.asUInt)   
-    event_counters.io.event_signals(65) := fp_pipeline.io.iss_fp_uops
+  //   //uops_issued.any
+  //   event_counters.io.event_signals(64) := PopCount(iss_int_uops.asUInt)   
+  //   event_counters.io.event_signals(65) := fp_pipeline.io.iss_fp_uops
 
-    //int_misc.recovery_cycles
-    event_counters.io.event_signals(66) := Mux(is_misc_recoverying, 1.U, 0.U)
-  }
+  //   //int_misc.recovery_cycles
+  //   event_counters.io.event_signals(66) := Mux(is_misc_recoverying, 1.U, 0.U)
+  // }
 
   //-- second level
   //--- BrMispredFraction: old counter is enough
@@ -746,28 +747,24 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   is_memstall_anyload := io.lsu.has_flight_ld && is_no_exe_cycle && !is_iq_empty
   is_memstall_stores := stq_dis_stall.reduce(_||_) && !is_memstall_anyload && (is_no_exe_cycle || is_one_exe_cycle) && !is_iq_empty
 
-  when (startCounter) {
-    //fetch latency
-    event_counters.io.event_signals(67) := Mux(is_fetch_lat_cause_cycle, 1.U, 0.U)
+  // when (startCounter) {
+  //   //fetch latency
+  //   event_counters.io.event_signals(67) := Mux(is_fetch_lat_cause_cycle, 1.U, 0.U)
 
-    //ExecutionStalls 
-    event_counters.io.event_signals(68) := Mux(is_no_exe_cycle, 1.U, 0.U)
-    event_counters.io.event_signals(69) := Mux(is_one_exe_cycle, 1.U, 0.U)
-    event_counters.io.event_signals(70) := Mux(is_iq_empty, 1.U, 0.U)
+  //   //ExecutionStalls 
+  //   event_counters.io.event_signals(68) := Mux(is_no_exe_cycle, 1.U, 0.U)
+  //   event_counters.io.event_signals(69) := Mux(is_one_exe_cycle, 1.U, 0.U)
+  //   event_counters.io.event_signals(70) := Mux(is_iq_empty, 1.U, 0.U)
 
-    //MemStalls
-    event_counters.io.event_signals(71) := Mux(is_memstall_anyload, 1.U, 0.U)
-    event_counters.io.event_signals(72) := Mux(is_memstall_stores, 1.U, 0.U)
+  //   //MemStalls
+  //   event_counters.io.event_signals(71) := Mux(is_memstall_anyload, 1.U, 0.U)
+  //   event_counters.io.event_signals(72) := Mux(is_memstall_stores, 1.U, 0.U)
 
-    //temp test for haosen
-    event_counters.io.event_signals(73) := PopCount(dec_fbundle_vals.asUInt) 
-    event_counters.io.event_signals(74) := PopCount(dec_valids.asUInt) 
-    event_counters.io.event_signals(75) := PopCount(dec_fire.asUInt) 
-  }
-
-
-
-
+  //   //temp test for haosen
+  //   event_counters.io.event_signals(73) := PopCount(dec_fbundle_vals.asUInt) 
+  //   event_counters.io.event_signals(74) := PopCount(dec_valids.asUInt) 
+  //   event_counters.io.event_signals(75) := PopCount(dec_fire.asUInt) 
+  // }
 
   //-------------------------------------------------------------
   // **** Fetch Stage/Frontend ****
@@ -796,7 +793,15 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   //       ERETs are reported to the CSR two cycles before we send the flush
   //       Exceptions are reported to the CSR on the cycle we send the flush
   // This discrepency should be resolved elsewhere.
+
+  val redirect_types = Wire(UInt(3.W))
+  val frontend_redirect_types = RegInit(0.U(3.W))
+
   when (RegNext(rob.io.flush.valid)) {
+
+    redirect_types := 0.U
+    frontend_redirect_types := 0.U
+
     io.ifu.redirect_val   := true.B
     io.ifu.redirect_flush := true.B
     val flush_typ = RegNext(rob.io.flush.bits.flush_typ)
@@ -852,6 +857,10 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
     io.ifu.redirect_memory_order_xcpt := RegNext(rob.io.flush.bits.memory_order_xcpt)
     io.ifu.redirect_ftq_idx := RegNext(rob.io.flush.bits.ftq_idx)
   } .elsewhen (brupdate.b2.mispredict && !RegNext(rob.io.flush.valid)) {
+
+    redirect_types := 1.U
+    frontend_redirect_types := 1.U
+
     val block_pc = AlignPCToBoundary(io.ifu.get_pc(1).pc, icBlockBytes)
     val uop_maybe_pc = block_pc | brupdate.b2.uop.pc_lob
     val npc = uop_maybe_pc + Mux(brupdate.b2.uop.is_rvc || brupdate.b2.uop.edge_inst, 2.U, 4.U)
@@ -912,8 +921,16 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
       }
     }
 
-  } .elsewhen (rob.io.flush_frontend || brupdate.b1.mispredict_mask =/= 0.U) {
+  } .elsewhen (brupdate.b1.mispredict_mask =/= 0.U) {
+    redirect_types := 2.U
+    frontend_redirect_types := 2.U
     io.ifu.redirect_flush   := true.B
+  } .elsewhen (rob.io.flush_frontend) {
+    redirect_types := 3.U
+    frontend_redirect_types := 3.U
+    io.ifu.redirect_flush   := true.B
+  } .otherwise {
+    redirect_types := 7.U
   }
 
   // Tell the FTQ it can deallocate entries by passing youngest ftq_idx.
@@ -1926,6 +1943,297 @@ class BoomCore()(implicit p: Parameters) extends BoomModule
   if (usingFPU) {
     fp_pipeline.io.debug_tsc_reg := debug_tsc_reg
   }
+
+
+  //-------------------------------------------------------------
+  //-------------------------------------------------------------
+  // **** TopDown code from zhs ****
+  //-------------------------------------------------------------
+  //-------------------------------------------------------------
+
+  val com_is_ld               = Wire(Vec(coreWidth, Bool()))
+  val com_is_st               = Wire(Vec(coreWidth, Bool()))
+  val com_is_br               = Wire(Vec(coreWidth, Bool()))
+  val com_is_jal              = Wire(Vec(coreWidth, Bool()))
+  val com_is_jalr             = Wire(Vec(coreWidth, Bool()))
+  val com_is_ret              = Wire(Vec(coreWidth, Bool()))
+  val com_is_jalr_no_ret      = Wire(Vec(coreWidth, Bool()))
+  val com_is_alu              = Wire(Vec(coreWidth, Bool()))
+  val com_is_mul              = Wire(Vec(coreWidth, Bool()))
+  val com_is_div              = Wire(Vec(coreWidth, Bool()))
+  val com_is_f2i              = Wire(Vec(coreWidth, Bool()))
+  val com_is_i2f              = Wire(Vec(coreWidth, Bool()))
+  val com_is_fpu              = Wire(Vec(coreWidth, Bool()))
+  val com_is_fdv              = Wire(Vec(coreWidth, Bool()))
+
+  val com_misp_br             = Wire(Vec(coreWidth, Bool()))
+  val com_misp_jalr           = Wire(Vec(coreWidth, Bool()))
+  val com_misp_ret            = Wire(Vec(coreWidth, Bool()))
+  val com_misp_jalr_no_ret    = Wire(Vec(coreWidth, Bool()))
+
+  val com_is_memq             = Wire(Vec(coreWidth, Bool()))
+  val com_is_intq             = Wire(Vec(coreWidth, Bool()))
+  val com_is_floatq           = Wire(Vec(coreWidth, Bool()))
+
+  for(w <- 0 until coreWidth) {
+    val uop = rob.io.commit.uops(w)
+    val valid = rob.io.commit.arch_valids(w)
+    com_is_ld(w) := valid && uop.uses_ldq 
+    com_is_st(w) := valid && uop.uses_stq 
+    com_is_br(w) := valid && uop.is_br 
+    com_is_jal(w) := valid && uop.is_jal
+    com_is_jalr(w) := valid && uop.is_jalr
+    com_is_ret(w) := valid && uop.is_jalr && ((uop.ldst === 0.U) && (uop.lrs1 === 1.U))
+    com_is_jalr_no_ret(w) := valid && uop.is_jalr && !((uop.ldst === 0.U) && (uop.lrs1 === 1.U))
+    com_is_alu(w) := valid && !com_is_br(w) && (uop.fu_code === FU_ALU)
+    com_is_mul(w) := valid && (uop.fu_code === FU_MUL)
+    com_is_div(w) := valid && (uop.fu_code === FU_DIV)
+    com_is_f2i(w) := valid && (uop.fu_code === FU_F2I)
+    com_is_i2f(w) := valid && (uop.fu_code === FU_I2F)
+    com_is_fpu(w) := valid && (uop.fu_code === FU_FPU)
+    com_is_fdv(w) := valid && (uop.fu_code === FU_FDV)
+
+    com_misp_br(w)   := com_is_br(w) && uop.debug_fsrc === BSRC_C
+    com_misp_jalr(w) := com_is_jalr(w) && uop.debug_fsrc === BSRC_C
+    com_misp_ret(w)  := com_is_ret(w) && uop.debug_fsrc === BSRC_C
+    com_misp_jalr_no_ret(w) := com_is_jalr_no_ret(w) && uop.debug_fsrc === BSRC_C
+
+    com_is_memq(w)   := valid && (uop.iq_type === IQT_MEM || uop.iq_type === IQT_MFP)
+    com_is_intq(w)   := valid && (uop.iq_type === IQT_INT)
+    com_is_floatq(w) := valid && (uop.iq_type === IQT_FP || uop.iq_type === IQT_MFP)
+  }
+
+  // val rob_head_is_ld  = rob.io.rob_head.valid && rob.io.rob_head.bits.uses_ldq
+  // val rob_head_is_st  = rob.io.rob_head.valid && rob.io.rob_head.bits.uses_stq
+  // val rob_head_is_br  = rob.io.rob_head.valid && rob.io.rob_head.bits.is_br
+  // val rob_head_is_jal = rob.io.rob_head.valid && rob.io.rob_head.bits.is_jal
+  // val rob_head_is_ret = rob.io.rob_head.valid && rob.io.rob_head.bits.is_jalr && ((rob.io.rob_head.bits.ldst === 0.U) && (rob.io.rob_head.bits.lrs1 === 1.U))
+  // val rob_head_is_jalr_no_ret = rob.io.rob_head.valid && rob.io.rob_head.bits.is_jalr && !((rob.io.rob_head.bits.ldst === 0.U) && (rob.io.rob_head.bits.lrs1 === 1.U))
+  // val rob_head_is_alu = rob.io.rob_head.valid && !rob_head_is_br && (rob.io.rob_head.bits.fu_code === FU_ALU)
+  // val rob_head_is_mul = rob.io.rob_head.valid && rob.io.rob_head.bits.fu_code === FU_MUL
+  // val rob_head_is_div = rob.io.rob_head.valid && rob.io.rob_head.bits.fu_code === FU_DIV
+  // val rob_head_is_f2i = rob.io.rob_head.valid && rob.io.rob_head.bits.fu_code === FU_F2I
+  // val rob_head_is_i2f = rob.io.rob_head.valid && rob.io.rob_head.bits.fu_code === FU_I2F
+  // val rob_head_is_fpu = rob.io.rob_head.valid && rob.io.rob_head.bits.fu_code === FU_FPU
+  // val rob_head_is_fdv = rob.io.rob_head.valid && rob.io.rob_head.bits.fu_code === FU_FDV
+
+  // val mem_issq_inst   = PopCount(mem_iss_unit.io.inst_cnt)
+  // val mem_iss_valid   = PopCount(mem_iss_unit.io.iss_valids)
+  // val mem_iss_req     = PopCount(mem_iss_unit.io.requests)
+  // val int_issq_inst   = PopCount(int_iss_unit.io.inst_cnt)
+  // val int_iss_valid   = PopCount(int_iss_unit.io.iss_valids)
+  // val int_iss_req     = PopCount(int_iss_unit.io.requests)
+  // val float_issq_inst = PopCount(fp_pipeline.io.inst_cnt)
+  // val float_iss_valid = PopCount(fp_pipeline.io.iss_valids)
+  // val float_iss_req   = PopCount(fp_pipeline.io.requests)
+
+  val itlb_miss = RegNext(RegNext(io.ifu.itlb_not_ready))
+  val icache_miss = RegNext(RegNext(io.ifu.icache_not_ready))
+  val bp2_clear = RegNext(RegNext(io.ifu.bp2_clear))
+  val bp3_clear = RegNext(io.ifu.bp3_clear)
+
+  val redirect_flush = RegInit(0.U(3.W))
+  when (redirect_flush > 0.U) {
+    redirect_flush := redirect_flush - 1.U
+  } 
+
+  when (io.ifu.redirect_flush) {
+    redirect_flush := 4.U
+  }
+
+  val frontend_reason = RegInit(0.U(3.W))
+  val frontend_reason_other = RegInit(1.U(3.W))
+
+  when (bp3_clear) {
+    frontend_reason_other := 1.U
+  } .elsewhen (bp2_clear) {
+    frontend_reason_other := 2.U
+  } .elsewhen (itlb_miss) {
+    frontend_reason_other := 3.U
+  } .elsewhen (icache_miss) {
+    frontend_reason_other := 4.U
+  }
+
+
+  when (redirect_flush > 0.U) {
+    frontend_reason := 0.U
+  } .elsewhen (frontend_reason_other === 1.U) {
+    frontend_reason := 1.U
+  } .elsewhen (frontend_reason_other === 2.U) {
+    frontend_reason := 2.U
+  } .elsewhen (frontend_reason_other === 3.U) {
+    frontend_reason := 3.U
+  } .elsewhen (frontend_reason_other === 4.U) {
+    frontend_reason := 4.U
+  } 
+
+  val cycles = 1.U
+  val commit_insts = PopCount(rob.io.commit.arch_valids.asUInt)
+
+  /* event06 -> total count of frontend*/
+  val event06 = coreWidth.U - PopCount(dec_valids.asUInt)
+  /* event07 -> total count of backend */
+  val event07 = PopCount(dec_valids.asUInt) - PopCount(dec_fire.asUInt)
+
+  val rob_kill_count = RegNext(rob.io.misprediction_kill_counts(0)) +& RegNext(rob.io.misprediction_kill_counts(1))
+  val rename_kill_count = rename_stage.io.kill_count
+  /* event08 -> bad speculation*/
+  val event08 = rob_kill_count +& rename_kill_count
+  val rob_rollback = PopCount(rob.io.commit.rbk_valids)
+
+  // when (rob_kill_count != 0.U || rename_kill_count != 0.U || rob_rollback != 0.U) {
+  //   printf("rob_kill_count: %d, rename_kill_count: %d, rob + rename: %d, rob_rollback: %d\n", rob_kill_count, rename_kill_count, event08, rob_rollback)
+  // }
+  
+  val backend_bound_rollback = (0 until coreWidth).map(w => dec_valids(w) && rob.io.commit.rollback).reduce(_ || _)
+  val backend_bound_dec_xcpt_stall = (0 until coreWidth).map(w => dec_valids(w) && dec_xcpt_stall).reduce(_ || _)
+  val backend_bound_branch_mask_full = (0 until coreWidth).map(w => dec_valids(w) && branch_mask_full(w)).reduce(_ || _)
+  val backend_bound_mispredict = (0 until coreWidth).map(w => dec_valids(w) && brupdate.b1.mispredict_mask =/= 0.U).reduce(_ || _)
+  val backend_bound_redirect_flush = (0 until coreWidth).map(w => dec_valids(w) && io.ifu.redirect_flush).reduce(_ || _)
+  /* backend - ROBFull */
+  val backend_bound_rob_not_ready = (0 until coreWidth).map(w => dis_valids(w) && !rob.io.ready).reduce(_ || _)
+  /* backend - PhyRegFull */
+  val backend_bound_ren_stalls = (0 until coreWidth).map(w => dis_valids(w) && ren_stalls(w)).reduce(_ || _)
+  /* backend - LdqFull */
+  val backend_bound_ldq_full = (0 until coreWidth).map(w => dis_valids(w) && io.lsu.ldq_full(w) && dis_uops(w).uses_ldq).reduce(_ || _)
+  /* backend - StqFull */
+  val backend_bound_stq_full = (0 until coreWidth).map(w => dis_valids(w) && io.lsu.stq_full(w) && dis_uops(w).uses_stq).reduce(_ || _)
+  val backend_bound_dispatcher_not_ready = (0 until coreWidth).map(w => dis_valids(w) && !dispatcher.io.ren_uops(w).ready).reduce(_ || _)
+  val backend_bound_wait_for_empty_pipeline = (0 until coreWidth).map(w => dis_valids(w) && wait_for_empty_pipeline(w)).reduce(_ || _)
+  val backend_bound_dis_prior_slot_unique = (0 until coreWidth).map(w => dis_valids(w) && dis_prior_slot_unique(w)).reduce(_ || _)
+
+  val frontend_branch_misprediction = RegInit(0.U(2.W))
+
+  when (oldest_mispredict.uop.is_br === true.B) {frontend_branch_misprediction := 0.U}
+  when (oldest_mispredict.uop.is_jalr === true.B) {frontend_branch_misprediction := 1.U}
+
+  for (w <- 0 until subECounterNum*16) {
+    event_counters.io.event_signals(w) := 0.U
+  }
+
+  // info_buffer.io.write_valid := false.B
+  // for (w <- 0 until numInfoSize) {
+  //   info_buffer.io.write_info(w) := 0.U
+  // }
+
+  rob.io.rename_stall := ren_stalls.reduce(_ || _)
+  // rob.io.intq_full := (!dispatcher.io.ren_uops(0).ready && dispatcher.io.ren_uops(0).bits.iq_type === IQT_INT) || (!dispatcher.io.ren_uops(1).ready && dispatcher.io.ren_uops(1).bits.iq_type === IQT_INT)
+
+  when (startCounter){
+      event_counters.io.event_signals(0) := cycles
+      event_counters.io.event_signals(1) := PopCount(rob.io.commit.arch_valids.asUInt)
+      event_counters.io.event_signals(2) := PopCount(dec_valids.asUInt)
+      event_counters.io.event_signals(3) := PopCount(dec_fire.asUInt)
+      event_counters.io.event_signals(4) := PopCount(dis_valids.asUInt)
+      event_counters.io.event_signals(5) := PopCount(dis_fire.asUInt)
+
+      // event_counters.io.event_signals(6) := 0.U
+      // event_counters.io.event_signals(7) := 0.U
+      // event_counters.io.event_signals(8) := 0.U
+      // event_counters.io.event_signals(9) := 0.U
+      // event_counters.io.event_signals(10) := 0.U
+      // event_counters.io.event_signals(11) := 0.U
+      // event_counters.io.event_signals(12) := 0.U
+      // event_counters.io.event_signals(13) := 0.U
+      // event_counters.io.event_signals(14) := 0.U
+      // event_counters.io.event_signals(15) := 0.U
+
+      when (frontend_reason === 0.U) { 
+        event_counters.io.event_signals(6) := event06 
+        when (frontend_redirect_types === 0.U) {event_counters.io.event_signals(11) := event06}
+        when (frontend_redirect_types === 1.U || frontend_redirect_types === 2.U) {
+          event_counters.io.event_signals(12) := event06
+          when (frontend_branch_misprediction === 0.U) {event_counters.io.event_signals(14) := event06}
+          when (frontend_branch_misprediction === 1.U) {event_counters.io.event_signals(15) := event06}
+        }
+        when (frontend_redirect_types === 3.U) {event_counters.io.event_signals(13) := event06}
+      }
+      when (frontend_reason === 1.U) { event_counters.io.event_signals(7) := event06 }
+      when (frontend_reason === 2.U) { event_counters.io.event_signals(8) := event06 }
+      when (frontend_reason === 3.U) { event_counters.io.event_signals(9) := event06 }
+      when (frontend_reason === 4.U) { event_counters.io.event_signals(10) := event06 }
+
+      // event_counters.io.event_signals(16) := 0.U
+      // event_counters.io.event_signals(17) := 0.U
+      // event_counters.io.event_signals(18) := 0.U
+      // event_counters.io.event_signals(19) := 0.U
+      // event_counters.io.event_signals(20) := 0.U
+      // event_counters.io.event_signals(21) := 0.U
+      // event_counters.io.event_signals(22) := 0.U
+      // event_counters.io.event_signals(23) := 0.U
+      // event_counters.io.event_signals(24) := 0.U
+      // event_counters.io.event_signals(25) := 0.U
+      // event_counters.io.event_signals(26) := 0.U
+      // event_counters.io.event_signals(27) := 0.U
+      // event_counters.io.event_signals(28) := 0.U
+      // event_counters.io.event_signals(29) := 0.U
+      // event_counters.io.event_signals(30) := 0.U
+
+      when (backend_bound_rollback) { event_counters.io.event_signals(16) := event07 }
+      when (backend_bound_dec_xcpt_stall) { event_counters.io.event_signals(17) := event07 }
+      when (backend_bound_branch_mask_full) { event_counters.io.event_signals(18) := event07 }
+      when (backend_bound_mispredict) { event_counters.io.event_signals(19) := event07 }
+      when (backend_bound_redirect_flush) { event_counters.io.event_signals(20) := event07 }
+      when (backend_bound_rob_not_ready) { event_counters.io.event_signals(21) := event07 }
+      when (backend_bound_ren_stalls) { event_counters.io.event_signals(22) := event07 }
+      when (backend_bound_ldq_full) { event_counters.io.event_signals(23) := event07 }
+      when (backend_bound_stq_full) { event_counters.io.event_signals(24) := event07 }
+      when (backend_bound_dispatcher_not_ready) { 
+        event_counters.io.event_signals(25) := event07 
+        when ((!dispatcher.io.ren_uops(0).ready && dispatcher.io.ren_uops(0).bits.iq_type === IQT_MEM) || (!dispatcher.io.ren_uops(1).ready && dispatcher.io.ren_uops(1).bits.iq_type === IQT_MEM)) {
+          event_counters.io.event_signals(28) := event07
+        }
+        when ((!dispatcher.io.ren_uops(0).ready && dispatcher.io.ren_uops(0).bits.iq_type === IQT_INT) || (!dispatcher.io.ren_uops(1).ready && dispatcher.io.ren_uops(1).bits.iq_type === IQT_INT)) {
+          event_counters.io.event_signals(29) := event07
+        }
+        when ((!dispatcher.io.ren_uops(0).ready && dispatcher.io.ren_uops(0).bits.iq_type === IQT_FP) || (!dispatcher.io.ren_uops(1).ready && dispatcher.io.ren_uops(1).bits.iq_type === IQT_FP)) {
+          event_counters.io.event_signals(30) := event07
+        }
+      }
+      when (backend_bound_wait_for_empty_pipeline) { event_counters.io.event_signals(26) := event07 }
+      when (backend_bound_dis_prior_slot_unique) { event_counters.io.event_signals(27) := event07 }
+
+      event_counters.io.event_signals(31) := rename_kill_count
+      event_counters.io.event_signals(32) := rob_kill_count
+      event_counters.io.event_signals(33) := PopCount(rob.io.commit.rbk_valids)
+
+      when (redirect_types === 0.U) { event_counters.io.event_signals(34) := rename_kill_count }
+      when (redirect_types === 1.U) { event_counters.io.event_signals(35) := rename_kill_count }
+      when (redirect_types === 2.U) { event_counters.io.event_signals(36) := rename_kill_count }
+      when (redirect_types === 3.U) { event_counters.io.event_signals(37) := rename_kill_count }
+
+      when ((redirect_types === 1.U && b2.uop.is_jalr === true.B) || (redirect_types === 2.U && oldest_mispredict.uop.is_jalr === true.B)) { event_counters.io.event_signals(38) := rename_kill_count }
+      when ((redirect_types === 1.U && b2.uop.is_br === true.B) || (redirect_types === 2.U && oldest_mispredict.uop.is_br === true.B)) { event_counters.io.event_signals(39) := rename_kill_count }
+      when (b2.uop.is_jalr === true.B) { event_counters.io.event_signals(40) := rob_kill_count }
+      when (b2.uop.is_br === true.B) { event_counters.io.event_signals(41) := rob_kill_count }
+
+      // // retiring:各类指令的数量
+      // event_counters.io.event_signals(42) := PopCount(com_is_ld)  
+      // event_counters.io.event_signals(43) := PopCount(com_is_st)
+      // event_counters.io.event_signals(44) := PopCount(com_is_br) 
+      // event_counters.io.event_signals(45) := PopCount(com_is_jal)
+      // event_counters.io.event_signals(46) := PopCount(com_is_jalr)
+      // event_counters.io.event_signals(47) := PopCount(com_is_ret)
+      // event_counters.io.event_signals(48) := PopCount(com_is_jalr_no_ret)
+      // event_counters.io.event_signals(49) := PopCount(com_is_alu)
+      // event_counters.io.event_signals(50) := PopCount(com_is_mul)
+      // event_counters.io.event_signals(51) := PopCount(com_is_div)
+      // event_counters.io.event_signals(52) := PopCount(com_is_f2i)
+      // event_counters.io.event_signals(53) := PopCount(com_is_i2f)
+      // event_counters.io.event_signals(54) := PopCount(com_is_fpu)
+      // event_counters.io.event_signals(55) := PopCount(com_is_fdv)
+
+      // event_counters.io.event_signals(56) := PopCount(io.lsu.ld_pred_failed)
+      // event_counters.io.event_signals(57) := PopCount(io.lsu.ld_forward)
+      // event_counters.io.event_signals(58) := rob.io.exception_thrown && (rob.io.com_xcpt.bits.cause === MINI_EXCEPTION_MEM_ORDERING)
+      // event_counters.io.event_signals(59) := rob.io.exception_thrown
+
+      // event_counters.io.event_signals(60) := PopCount(com_misp_br)
+      // event_counters.io.event_signals(61) := PopCount(com_misp_jalr)
+      // event_counters.io.event_signals(62) := PopCount(com_misp_ret)
+      // event_counters.io.event_signals(63) := PopCount(com_misp_jalr_no_ret)
+  }
+
 
   //-------------------------------------------------------------
   //-------------------------------------------------------------
